@@ -5,9 +5,17 @@ import random
 import os
 import re
 from dotenv import load_dotenv
-from flask import Flask, jsonify
 import threading
 from datetime import datetime
+
+# Optional Flask import for webserver (for 24/7 deployment)
+try:
+    from flask import Flask, jsonify
+    FLASK_AVAILABLE = True
+    print("✅ Flask imported successfully - webserver will be available")
+except ImportError:
+    print("⚠️  Flask not available - running without webserver")
+    FLASK_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
@@ -1159,36 +1167,57 @@ async def on_command_error(ctx, error):
 # The webserver runs in a separate thread so it doesn't block the Discord bot.
 # =============================================================================
 
-app = Flask(__name__)
+# Flask webserver setup (only if Flask is available)
+if FLASK_AVAILABLE:
+    app = Flask(__name__)
 
-@app.route('/')
-def home():
-    """Health check endpoint for the webserver"""
-    return jsonify({
-        "status": "online",
-        "bot": "DOTGEN.AI Discord Bot",
-        "timestamp": datetime.now().isoformat(),
-        "message": "Bot is running!"
-    })
+    @app.route('/')
+    def home():
+        """Health check endpoint for the webserver"""
+        return jsonify({
+            "status": "online",
+            "bot": "DOTGEN.AI Discord Bot",
+            "timestamp": datetime.now().isoformat(),
+            "message": "Bot is running!"
+        })
 
-@app.route('/health')
-def health():
-    """Health endpoint for uptime monitoring"""
-    return jsonify({
-        "status": "healthy",
-        "uptime": "operational",
-        "service": "DOTGEN.AI Bot"
-    })
+    @app.route('/health')
+    def health():
+        """Health endpoint for uptime monitoring"""
+        return jsonify({
+            "status": "healthy",
+            "uptime": "operational",
+            "service": "DOTGEN.AI Bot"
+        })
 
-@app.route('/ping')
-def ping():
-    """Simple ping endpoint"""
-    return "pong"
+    @app.route('/ping')
+    def ping():
+        """Simple ping endpoint"""
+        return "pong"
 
-def run_webserver():
-    """Run the Flask webserver in a separate thread"""
-    port = int(os.getenv('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    def run_webserver():
+        """Run the Flask webserver in a separate thread"""
+        try:
+            port = int(os.getenv('PORT', 8080))
+            app.run(host='0.0.0.0', port=port, debug=False)
+        except Exception as e:
+            print(f"❌ Webserver error: {e}")
+
+    def start_webserver():
+        """Start the webserver in a background thread"""
+        try:
+            webserver_thread = threading.Thread(target=run_webserver, daemon=True)
+            webserver_thread.start()
+            print(f"🌐 DOTGEN.AI Webserver started on port {os.getenv('PORT', 8080)}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to start webserver: {e}")
+            return False
+else:
+    def start_webserver():
+        """Dummy function when Flask is not available"""
+        print("⚠️  Webserver not available (Flask not installed)")
+        return False
 
 def start_webserver():
     """Start the webserver in a background thread"""
@@ -1224,9 +1253,12 @@ if __name__ == "__main__":
             print()
         
         try:
-            # Start the webserver for 24/7 keepalive
-            start_webserver()
-            print("🌐 Webserver started for 24/7 operation")
+            # Start the webserver for 24/7 keepalive (if Flask is available)
+            webserver_started = start_webserver()
+            if webserver_started:
+                print("🌐 Webserver started for 24/7 operation")
+            else:
+                print("⚠️  Running without webserver - bot may sleep on some cloud platforms")
             
             # Start the bot
             bot.run(TOKEN)
