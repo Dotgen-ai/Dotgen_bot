@@ -5,6 +5,9 @@ import random
 import os
 import re
 from dotenv import load_dotenv
+from flask import Flask, jsonify
+import threading
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -1141,7 +1144,59 @@ async def on_command_error(ctx, error):
         await ctx.send(f"❌ An error occurred: {error}")
         print(f"Command error: {error}")
 
-# Run the bot
+# =============================================================================
+# WEBSERVER FOR 24/7 OPERATION
+# =============================================================================
+# This Flask webserver helps keep the bot alive when deployed to cloud platforms
+# like Heroku, Railway, Render, etc. by providing HTTP endpoints that can be
+# pinged by uptime monitors or the platform itself to prevent the bot from sleeping.
+#
+# Available endpoints:
+# - GET / : Main health check with bot status info
+# - GET /health : Simple health check for monitoring
+# - GET /ping : Simple ping endpoint (returns "pong")
+#
+# The webserver runs in a separate thread so it doesn't block the Discord bot.
+# =============================================================================
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    """Health check endpoint for the webserver"""
+    return jsonify({
+        "status": "online",
+        "bot": "DOTGEN.AI Discord Bot",
+        "timestamp": datetime.now().isoformat(),
+        "message": "Bot is running!"
+    })
+
+@app.route('/health')
+def health():
+    """Health endpoint for uptime monitoring"""
+    return jsonify({
+        "status": "healthy",
+        "uptime": "operational",
+        "service": "DOTGEN.AI Bot"
+    })
+
+@app.route('/ping')
+def ping():
+    """Simple ping endpoint"""
+    return "pong"
+
+def run_webserver():
+    """Run the Flask webserver in a separate thread"""
+    port = int(os.getenv('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+def start_webserver():
+    """Start the webserver in a background thread"""
+    webserver_thread = threading.Thread(target=run_webserver, daemon=True)
+    webserver_thread.start()
+    print(f"🌐 DOTGEN.AI Webserver started on port {os.getenv('PORT', 8080)}")
+
+# Bot configuration
 if __name__ == "__main__":
     if not TOKEN:
         print("❌ DISCORD_TOKEN not found in environment variables!")
@@ -1160,8 +1215,7 @@ if __name__ == "__main__":
         print(f"   - Allowed Roles: {len(ALLOWED_ROLES)} role(s) configured" if ALLOWED_ROLES else "   - Allowed Roles: All users allowed")
         print(f"   - Bot Prefix: {BOT_PREFIX}")
         print(f"   - Max Voice Limit: {MAX_VOICE_LIMIT}")
-        print()
-        
+        print()        
         if not privileged_intents_available:
             print("⚠️  RUNNING IN LIMITED MODE:")
             print("   - No automatic member join detection")
@@ -1170,6 +1224,11 @@ if __name__ == "__main__":
             print()
         
         try:
+            # Start the webserver for 24/7 keepalive
+            start_webserver()
+            print("🌐 Webserver started for 24/7 operation")
+            
+            # Start the bot
             bot.run(TOKEN)
         except discord.errors.PrivilegedIntentsRequired:
             print("\n❌ PRIVILEGED INTENTS ERROR!")
