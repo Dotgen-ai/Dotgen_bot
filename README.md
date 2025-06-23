@@ -1,4 +1,4 @@
-# XRP Discord Bot
+# Dotgen Discord Bot
 
 A Discord bot with unique welcome messages and dynamic voice channel creation based on user roles.
 
