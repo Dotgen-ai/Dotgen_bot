@@ -651,7 +651,7 @@ async def bot_info(ctx):
             value="Automatically sends unique welcome messages when new members join",
             inline=False
         )
-    else:        
+    else:
         embed.add_field(
             name="🎉 Welcome System",
             value=f"Use `{BOT_PREFIX}welcome @member` to send welcome messages",
@@ -681,7 +681,8 @@ async def bot_info(ctx):
         f"`{BOT_PREFIX}list_roles` - List allowed roles",
         f"`{BOT_PREFIX}voice_stats` - Voice channel statistics",
         f"`{BOT_PREFIX}send <#channel> <message>` - Send message",
-        f"`{BOT_PREFIX}announce <message>` - Send announcement",
+        f"`{BOT_PREFIX}announce <#channel> <message>` - Send announcement to specific channel",
+        f"`{BOT_PREFIX}announce_all <message>` - Send announcement to all announcement channels",
         f"`{BOT_PREFIX}echo <message>` - Make bot repeat message",
         f"`{BOT_PREFIX}botstatus <action>` - Control bot status"
     ]
@@ -963,8 +964,39 @@ async def send_message(ctx, channel: discord.TextChannel, *, message):
 
 @bot.command(name="announce")
 @commands.has_permissions(administrator=True)
-async def announce(ctx, *, message):
-    """Send an announcement to multiple channels"""
+async def announce(ctx, channel: discord.TextChannel, *, message):
+    """Send an announcement to a specific channel"""
+    try:
+        # Check if bot has permission to send messages in the target channel
+        if not channel.permissions_for(ctx.guild.me).send_messages:
+            await ctx.send(f"❌ I don't have permission to send messages in {channel.mention}")
+            return
+        
+        # Create announcement embed
+        embed = discord.Embed(
+            title="📢 Server Announcement",
+            description=message,
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text=f"Announced by {ctx.author.display_name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+        
+        # Send the announcement
+        await channel.send(embed=embed)
+        
+        # Confirm to the user
+        if channel != ctx.channel:
+            await ctx.send(f"✅ Announcement sent to {channel.mention}")
+        else:
+            await ctx.send("✅ Announcement sent!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error sending announcement: {e}")
+
+@bot.command(name="announce_all")
+@commands.has_permissions(administrator=True)
+async def announce_all(ctx, *, message):
+    """Send an announcement to multiple common announcement channels"""
     try:
         # Look for common announcement channels
         target_channels = []
