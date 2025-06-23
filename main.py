@@ -1,9 +1,9 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import asyncio
 import random
 import os
+import re
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -17,7 +17,7 @@ VOICE_LOG_CHANNEL_ID = int(os.getenv('VOICE_LOG_CHANNEL_ID', 0)) or None
 VOICE_CATEGORY_ID = int(os.getenv('VOICE_CATEGORY_ID', 0)) or None
 GUILD_ID = int(os.getenv('GUILD_ID', 0)) or None
 DEFAULT_ROLE_ID = int(os.getenv('DEFAULT_ROLE_ID', 0)) or None
-BOT_PREFIX = os.getenv('BOT_PREFIX', '/')
+BOT_PREFIX = os.getenv('BOT_PREFIX', '!')
 MAX_VOICE_LIMIT = int(os.getenv('MAX_VOICE_CHANNEL_LIMIT', 10))
 
 # Parse allowed roles from environment variable
@@ -63,18 +63,7 @@ WELCOME_MESSAGES = [
 async def on_ready():
     print(f'✅ {bot.user} has connected to Discord!')
     print(f'📊 Bot is in {len(bot.guilds)} guild(s)')
-    
-    # Sync slash commands
-    try:
-        if GUILD_ID:
-            guild = discord.Object(id=GUILD_ID)
-            synced = await bot.tree.sync(guild=guild)
-            print(f"✅ Synced {len(synced)} slash commands to guild {GUILD_ID}")
-        else:
-            synced = await bot.tree.sync()
-            print(f"✅ Synced {len(synced)} slash commands globally")
-    except Exception as e:
-        print(f"⚠️  Failed to sync slash commands: {e}")
+    print(f'🎛️  Using prefix: {BOT_PREFIX}')
     
     # Check if privileged intents are working
     if privileged_intents_available:
@@ -83,7 +72,7 @@ async def on_ready():
         print("   - Voice channels: ✅ Enabled")    
     else:        
         print("⚠️  Running in LIMITED MODE (no privileged intents)")
-        print("   - Welcome messages: Use /welcome command instead of automatic detection")
+        print("   - Welcome messages: Use !welcome command instead of automatic detection")
         print("   - Voice channels: Working normally")
     
     # Validate configuration
@@ -118,7 +107,8 @@ async def on_ready():
         print(f'✅ Allowed roles configured: {len(ALLOWED_ROLES)} role(s)')
     else:
         print('⚠️  No allowed roles configured - all users can create voice channels')
-      # Set rotating bot status
+    
+    # Set rotating bot status
     try:
         await start_rotating_status()
         print("✅ Rotating bot status started successfully")
@@ -126,16 +116,16 @@ async def on_ready():
         print(f"⚠️  Could not start rotating status: {e}")
     
     print("🚀 Bot is ready to use!")
-    print("💡 Use /config_status to check your configuration")
+    print(f"💡 Use {BOT_PREFIX}config to check your configuration")
     if not privileged_intents_available:
-        print("💡 Use /welcome @member to send welcome messages manually")
+        print(f"💡 Use {BOT_PREFIX}welcome @member to send welcome messages manually")
 
 # Manual welcome command (fallback for when privileged intents aren't available)
-@bot.tree.command(name="welcome", description="Send a welcome message for a member")
-async def manual_welcome(interaction: discord.Interaction, member: discord.Member = None):
+@bot.command(name="welcome")
+async def manual_welcome(ctx, member: discord.Member = None):
     """Send a welcome message for a member"""
     if not member:
-        member = interaction.user
+        member = ctx.author
     
     try:
         # Get the welcome channel from environment variable first
@@ -146,7 +136,7 @@ async def manual_welcome(interaction: discord.Interaction, member: discord.Membe
         
         # Fallback to current channel if no specific channel ID is set
         if not welcome_channel:
-            welcome_channel = interaction.channel
+            welcome_channel = ctx.channel
         
         if welcome_channel:
             # Select a random welcome message
@@ -164,17 +154,17 @@ async def manual_welcome(interaction: discord.Interaction, member: discord.Membe
                 value=discord.utils.format_dt(member.created_at, style='R'), 
                 inline=True
             )
-            embed.set_footer(text=f"Welcome to {interaction.guild.name}!")
+            embed.set_footer(text=f"Welcome to {ctx.guild.name}!")
             
             await welcome_channel.send(embed=embed)
             
-            if welcome_channel != interaction.channel:
-                await interaction.response.send_message(f"✅ Welcome message sent to {welcome_channel.mention} for {member.mention}", ephemeral=True)
+            if welcome_channel != ctx.channel:
+                await ctx.send(f"✅ Welcome message sent to {welcome_channel.mention} for {member.mention}")
             else:
-                await interaction.response.send_message("✅ Welcome message sent!", ephemeral=True)
+                await ctx.send("✅ Welcome message sent!")
             
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error sending welcome message: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error sending welcome message: {e}")
 
 @bot.event
 async def on_member_join(member):
@@ -433,16 +423,12 @@ async def handle_voice_channel_cleanup(channel):
             del temp_voice_channels[channel.id]
 
 # Commands for managing the bot
-@bot.tree.command(name="setup_lobby", description="Setup the lobby voice channel for creating temporary channels")
-@app_commands.describe(category_name="Name of the category to create the lobby in")
-async def setup_lobby(interaction: discord.Interaction, category_name: str = "Voice Channels"):
+@bot.command(name="setup_lobby")
+@commands.has_permissions(administrator=True)
+async def setup_lobby(ctx, *, category_name="Voice Channels"):
     """Setup the lobby voice channel for creating temporary channels"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
-        guild = interaction.guild
+        guild = ctx.guild
         
         # Find or create the category
         category = discord.utils.get(guild.categories, name=category_name)
@@ -461,21 +447,17 @@ async def setup_lobby(interaction: discord.Interaction, category_name: str = "Vo
             description=f"Created **{lobby_channel.name}** in **{category.name}** category.\n\nUsers can now join this channel to create their own role-based voice channels!\n\n**Channel ID:** `{lobby_channel.id}`\n**Category ID:** `{category.id}`\n\nAdd these IDs to your .env file for automatic detection.",
             color=discord.Color.green()
         )
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error setting up lobby: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error setting up lobby: {e}")
 
-@bot.tree.command(name="get_ids", description="Get channel and server IDs for .env configuration")
-@app_commands.describe(channel="Optional channel to get the ID for")
-async def get_ids(interaction: discord.Interaction, channel: discord.TextChannel = None):
+@bot.command(name="get_ids", aliases=["ids"])
+@commands.has_permissions(administrator=True)
+async def get_ids(ctx, channel: discord.TextChannel = None):
     """Get channel and server IDs for .env configuration"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
-        guild = interaction.guild
+        guild = ctx.guild
         
         embed = discord.Embed(
             title="📋 Server & Channel IDs",
@@ -491,7 +473,7 @@ async def get_ids(interaction: discord.Interaction, channel: discord.TextChannel
         
         embed.add_field(
             name="📝 Current Channel ID",
-            value=f"`{interaction.channel.id}`",
+            value=f"`{ctx.channel.id}`",
             inline=True
         )
         
@@ -523,18 +505,15 @@ async def get_ids(interaction: discord.Interaction, channel: discord.TextChannel
         
         embed.set_footer(text="💡 Right-click on channels/categories in Discord and select 'Copy ID' to get their IDs")
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error getting IDs: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error getting IDs: {e}")
 
-@bot.tree.command(name="config_status", description="Check the current configuration status")
-async def config_status(interaction: discord.Interaction):
+@bot.command(name="config", aliases=["config_status", "status"])
+@commands.has_permissions(administrator=True)
+async def config_status(ctx):
     """Check the current configuration status"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
         embed = discord.Embed(
             title="⚙️ Configuration Status",
@@ -596,7 +575,7 @@ async def config_status(interaction: discord.Interaction):
         # Check default role
         role_status = "❌ Not Set"
         if DEFAULT_ROLE_ID:
-            role = interaction.guild.get_role(DEFAULT_ROLE_ID)
+            role = ctx.guild.get_role(DEFAULT_ROLE_ID)
             role_status = f"✅ @{role.name}" if role else "❌ Invalid ID"
         embed.add_field(
             name="👤 Default Role",
@@ -609,7 +588,7 @@ async def config_status(interaction: discord.Interaction):
         if ALLOWED_ROLES:
             valid_roles = []
             for role_id in ALLOWED_ROLES:
-                role = interaction.guild.get_role(role_id)
+                role = ctx.guild.get_role(role_id)
                 if role:
                     valid_roles.append(f"@{role.name}")
             if valid_roles:
@@ -639,19 +618,19 @@ async def config_status(interaction: discord.Interaction):
             inline=True
         )
         
-        embed.set_footer(text="Use /get_ids to get channel/server IDs for your .env file")
+        embed.set_footer(text=f"Use {BOT_PREFIX}get_ids to get channel/server IDs for your .env file")
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error checking configuration: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error checking configuration: {e}")
 
-@bot.tree.command(name="bot_info", description="Display bot information and features")
-async def bot_info(interaction: discord.Interaction):
+@bot.command(name="bot_info", aliases=["info"])
+async def bot_info(ctx):
     """Display bot information and features"""
     embed = discord.Embed(
-        title="🤖 Bot Information",
-        description=f"Welcome to the XRP Discord Bot!{' (Limited Mode)' if not privileged_intents_available else ''}",
+        title="🤖 DOTGEN.AI Discord Bot",
+        description=f"Advanced Discord bot with dynamic voice channels and welcome system!{' (Limited Mode)' if not privileged_intents_available else ''}",
         color=discord.Color.blue()
     )
     
@@ -664,7 +643,7 @@ async def bot_info(interaction: discord.Interaction):
     else:        
         embed.add_field(
             name="🎉 Welcome System",
-            value="Use `/welcome @member` to send welcome messages",
+            value=f"Use `{BOT_PREFIX}welcome @member` to send welcome messages",
             inline=False
         )
     
@@ -674,32 +653,37 @@ async def bot_info(interaction: discord.Interaction):
         inline=False
     )
     
-    embed.add_field(        name="📊 Stats",
+    embed.add_field(
+        name="📊 Stats",
         value=f"**Servers:** {len(bot.guilds)}\n**Temp Channels:** {len(temp_voice_channels)}",
         inline=True
     )
     
     admin_commands = [
-        "`/setup_lobby` - Setup voice channel lobby",
-        "`/cleanup_channels` - Clean empty channels",
-        "`/welcome @member` - Send welcome message",
-        "`/get_ids` - Get channel/server IDs",
-        "`/config_status` - Check configuration",
-        "`/add_role @role` - Add allowed role",
-        "`/remove_role @role` - Remove allowed role",
-        "`/list_roles` - List allowed roles",
-        "`/voice_stats` - Voice channel statistics",
-        "`/send_message` - Send message to any channel",
-        "`/announce` - Send announcement to multiple channels",
-        "`/echo` - Make bot repeat a message",        "`/forward_message` - Forward message between channels",
-        "`/copy_last_message` - Copy recent messages",
-        "`/mirror_channel` - Set up automatic mirroring",
-        "`/get_message_id` - Get message IDs for forwarding"
+        f"`{BOT_PREFIX}setup_lobby` - Setup voice channel lobby",
+        f"`{BOT_PREFIX}cleanup` - Clean empty channels",
+        f"`{BOT_PREFIX}welcome @member` - Send welcome message",
+        f"`{BOT_PREFIX}get_ids` - Get channel/server IDs",
+        f"`{BOT_PREFIX}config` - Check configuration",
+        f"`{BOT_PREFIX}add_role @role` - Add allowed role",
+        f"`{BOT_PREFIX}remove_role @role` - Remove allowed role",
+        f"`{BOT_PREFIX}list_roles` - List allowed roles",
+        f"`{BOT_PREFIX}voice_stats` - Voice channel statistics",
+        f"`{BOT_PREFIX}send <#channel> <message>` - Send message",
+        f"`{BOT_PREFIX}announce <message>` - Send announcement",
+        f"`{BOT_PREFIX}echo <message>` - Make bot repeat message",
+        f"`{BOT_PREFIX}botstatus <action>` - Control bot status"
     ]
     
     embed.add_field(
         name="🛠️ Admin Commands",
         value="\n".join(admin_commands),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📖 General Commands",
+        value=f"`{BOT_PREFIX}info` - Show this information\n`{BOT_PREFIX}ping` - Check bot latency",
         inline=False
     )
     
@@ -710,21 +694,28 @@ async def bot_info(interaction: discord.Interaction):
             inline=False
         )
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await ctx.send(embed=embed)
 
-@bot.tree.command(name="add_role", description="Add a role to the allowed roles list for voice channel creation")
-@app_commands.describe(role="The role to add to the allowed list")
-async def add_allowed_role(interaction: discord.Interaction, role: discord.Role):
+@bot.command(name="ping")
+async def ping(ctx):
+    """Check bot latency"""
+    latency = round(bot.latency * 1000)
+    embed = discord.Embed(
+        title="🏓 Pong!",
+        description=f"Bot latency: **{latency}ms**",
+        color=discord.Color.green() if latency < 100 else discord.Color.orange() if latency < 200 else discord.Color.red()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="add_role")
+@commands.has_permissions(administrator=True)
+async def add_allowed_role(ctx, role: discord.Role):
     """Add a role to the allowed roles list for voice channel creation"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
         global ALLOWED_ROLES
         
         if role.id in ALLOWED_ROLES:
-            await interaction.response.send_message(f"❌ Role @{role.name} is already in the allowed roles list.", ephemeral=True)
+            await ctx.send(f"❌ Role @{role.name} is already in the allowed roles list.")
             return
         
         ALLOWED_ROLES.append(role.id)
@@ -759,24 +750,20 @@ async def add_allowed_role(interaction: discord.Interaction, role: discord.Role)
             value=str(len(ALLOWED_ROLES)), 
             inline=True
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error adding role: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error adding role: {e}")
 
-@bot.tree.command(name="remove_role", description="Remove a role from the allowed roles list for voice channel creation")
-@app_commands.describe(role="The role to remove from the allowed list")
-async def remove_allowed_role(interaction: discord.Interaction, role: discord.Role):
+@bot.command(name="remove_role")
+@commands.has_permissions(administrator=True)
+async def remove_allowed_role(ctx, role: discord.Role):
     """Remove a role from the allowed roles list for voice channel creation"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
         global ALLOWED_ROLES
         
         if role.id not in ALLOWED_ROLES:
-            await interaction.response.send_message(f"❌ Role @{role.name} is not in the allowed roles list.", ephemeral=True)
+            await ctx.send(f"❌ Role @{role.name} is not in the allowed roles list.")
             return
         
         ALLOWED_ROLES.remove(role.id)
@@ -812,18 +799,15 @@ async def remove_allowed_role(interaction: discord.Interaction, role: discord.Ro
                 value="All users can now create voice channels",
                 inline=False
             )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error removing role: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error removing role: {e}")
 
-@bot.tree.command(name="list_roles", description="List all allowed roles for voice channel creation")
-async def list_allowed_roles(interaction: discord.Interaction):
+@bot.command(name="list_roles", aliases=["roles"])
+@commands.has_permissions(administrator=True)
+async def list_allowed_roles(ctx):
     """List all allowed roles for voice channel creation"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
         if not ALLOWED_ROLES:
             embed = discord.Embed(
@@ -836,7 +820,7 @@ async def list_allowed_roles(interaction: discord.Interaction):
             invalid_roles = []
             
             for role_id in ALLOWED_ROLES:
-                role = interaction.guild.get_role(role_id)
+                role = ctx.guild.get_role(role_id)
                 if role:
                     role_list.append(f"• @{role.name} (`{role_id}`)")
                 else:
@@ -861,19 +845,16 @@ async def list_allowed_roles(interaction: discord.Interaction):
                 inline=True
             )
         
-        embed.set_footer(text="Use /add_role @role to add roles or /remove_role @role to remove roles")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.set_footer(text=f"Use {BOT_PREFIX}add_role @role to add roles or {BOT_PREFIX}remove_role @role to remove roles")
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error listing roles: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error listing roles: {e}")
 
-@bot.tree.command(name="voice_stats", description="Show voice channel statistics")
-async def voice_stats(interaction: discord.Interaction):
+@bot.command(name="voice_stats", aliases=["vstats", "stats"])
+@commands.has_permissions(administrator=True)
+async def voice_stats(ctx):
     """Show voice channel statistics"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     try:
         embed = discord.Embed(
             title="📊 Voice Channel Statistics",
@@ -930,18 +911,15 @@ async def voice_stats(interaction: discord.Interaction):
             inline=True
         )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error getting stats: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error getting stats: {e}")
 
-@bot.tree.command(name="cleanup_channels", description="Clean up all empty temporary voice channels")
-async def cleanup_channels(interaction: discord.Interaction):
+@bot.command(name="cleanup", aliases=["cleanup_channels", "clean"])
+@commands.has_permissions(administrator=True)
+async def cleanup_channels(ctx):
     """Clean up all empty temporary voice channels"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-        
     cleaned = 0
     for channel_id, channel_info in list(temp_voice_channels.items()):
         channel = channel_info['channel']
@@ -954,130 +932,55 @@ async def cleanup_channels(interaction: discord.Interaction):
             # Channel might already be deleted
             del temp_voice_channels[channel_id]
     
-    await interaction.response.send_message(f"✅ Cleaned up {cleaned} empty voice channels.", ephemeral=True)
+    await ctx.send(f"✅ Cleaned up {cleaned} empty voice channels.")
 
-@bot.tree.command(name="send_message", description="Send a message from the bot to any channel")
-@app_commands.describe(
-    channel="The channel to send the message to",
-    message="The message content to send",
-    embed_title="Optional: Title for an embed message",
-    embed_color="Optional: Color for embed (red, green, blue, orange, purple, gold)"
-)
-async def send_message(
-    interaction: discord.Interaction, 
-    channel: discord.TextChannel, 
-    message: str,
-    embed_title: str = None,
-    embed_color: str = None
-):
+@bot.command(name="send")
+@commands.has_permissions(administrator=True)
+async def send_message(ctx, channel: discord.TextChannel, *, message):
     """Send a message from the bot to any channel"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-    
     try:
         # Check if bot has permission to send messages in the target channel
-        if not channel.permissions_for(interaction.guild.me).send_messages:
-            await interaction.response.send_message(f"❌ I don't have permission to send messages in {channel.mention}", ephemeral=True)
+        if not channel.permissions_for(ctx.guild.me).send_messages:
+            await ctx.send(f"❌ I don't have permission to send messages in {channel.mention}")
             return
         
-        # If embed parameters are provided, create an embed
-        if embed_title or embed_color:
-            # Set embed color
-            color_map = {
-                "red": discord.Color.red(),
-                "green": discord.Color.green(),
-                "blue": discord.Color.blue(),
-                "orange": discord.Color.orange(),
-                "purple": discord.Color.purple(),
-                "gold": discord.Color.gold(),
-                "yellow": discord.Color.yellow(),
-                "dark_blue": discord.Color.dark_blue(),
-                "dark_green": discord.Color.dark_green(),
-                "dark_red": discord.Color.dark_red()
-            }
-            
-            selected_color = color_map.get(embed_color.lower() if embed_color else "", discord.Color.blue())
-            
-            embed = discord.Embed(
-                title=embed_title or "📢 Announcement",
-                description=message,
-                color=selected_color
-            )
-            embed.set_footer(text=f"Sent by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url)
-            embed.timestamp = discord.utils.utcnow()
-            
-            await channel.send(embed=embed)
-            await interaction.response.send_message(f"✅ Embed message sent to {channel.mention}", ephemeral=True)
-        else:
-            # Send regular message
-            await channel.send(message)
-            await interaction.response.send_message(f"✅ Message sent to {channel.mention}", ephemeral=True)
+        await channel.send(message)
+        await ctx.send(f"✅ Message sent to {channel.mention}")
             
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error sending message: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error sending message: {e}")
 
-@bot.tree.command(name="announce", description="Send an announcement to multiple channels")
-@app_commands.describe(
-    message="The announcement message",
-    channels="Channels to send to (mention them, e.g., #general #announcements)",
-    embed_title="Optional: Title for the announcement embed",
-    ping_role="Optional: Role to ping in the announcement"
-)
-async def announce(
-    interaction: discord.Interaction,
-    message: str,
-    channels: str = None,
-    embed_title: str = None,
-    ping_role: discord.Role = None
-):
+@bot.command(name="announce")
+@commands.has_permissions(administrator=True)
+async def announce(ctx, *, message):
     """Send an announcement to multiple channels"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-    
     try:
-        # Parse channel mentions or use default announcement channels
+        # Look for common announcement channels
         target_channels = []
+        for channel in ctx.guild.text_channels:
+            if channel.name.lower() in ['announcements', 'announcement', 'general', 'news']:
+                target_channels.append(channel)
         
-        if channels:
-            # Extract channel IDs from mentions
-            import re
-            channel_ids = re.findall(r'<#(\d+)>', channels)
-            for channel_id in channel_ids:
-                channel = interaction.guild.get_channel(int(channel_id))
-                if channel and isinstance(channel, discord.TextChannel):
-                    target_channels.append(channel)
-        
-        # If no channels specified, look for common announcement channels
+        # If no announcement channels found, use current channel
         if not target_channels:
-            for channel in interaction.guild.text_channels:
-                if channel.name.lower() in ['announcements', 'announcement', 'general', 'news']:
-                    target_channels.append(channel)
-        
-        # If still no channels found, use current channel
-        if not target_channels:
-            target_channels = [interaction.channel]
+            target_channels = [ctx.channel]
         
         # Create announcement embed
         embed = discord.Embed(
-            title=embed_title or "📢 Server Announcement",
+            title="📢 Server Announcement",
             description=message,
             color=discord.Color.gold()
         )
-        embed.set_footer(text=f"Announced by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url)
+        embed.set_footer(text=f"Announced by {ctx.author.display_name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
         embed.timestamp = discord.utils.utcnow()
-        
-        # Add role ping if specified
-        content = ping_role.mention if ping_role else None
         
         sent_count = 0
         failed_channels = []
         
         for channel in target_channels:
             try:
-                if channel.permissions_for(interaction.guild.me).send_messages:
-                    await channel.send(content=content, embed=embed)
+                if channel.permissions_for(ctx.guild.me).send_messages:
+                    await channel.send(embed=embed)
                     sent_count += 1
                 else:
                     failed_channels.append(channel.name)
@@ -1089,348 +992,30 @@ async def announce(
         if failed_channels:
             response_msg += f"\n⚠️ Failed to send to: {', '.join(failed_channels)}"
         
-        await interaction.response.send_message(response_msg, ephemeral=True)
+        await ctx.send(response_msg)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error sending announcement: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error sending announcement: {e}")
 
-@bot.tree.command(name="echo", description="Make the bot repeat a message in the current channel")
-@app_commands.describe(
-    message="The message for the bot to say",
-    delete_original="Whether to delete your command message (default: True)"
-)
-async def echo(interaction: discord.Interaction, message: str, delete_original: bool = True):
+@bot.command(name="echo")
+@commands.has_permissions(manage_messages=True)
+async def echo(ctx, *, message):
     """Make the bot repeat a message in the current channel"""
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You need 'Manage Messages' permission to use this command.", ephemeral=True)
-        return
-    
     try:
-        # Send the message
-        await interaction.response.send_message(message)
-        
-        # If delete_original is False, send a confirmation
-        if not delete_original:
-            await interaction.followup.send("✅ Message sent!", ephemeral=True)
+        await ctx.message.delete()  # Delete the command message
+        await ctx.send(message)
             
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error sending message: {e}", ephemeral=True)
-
-@bot.tree.command(name="forward_message", description="Forward a message from one channel to another")
-@app_commands.describe(
-    source_channel="The channel to get the message from",
-    message_id="The ID of the message to forward",
-    target_channel="The channel to forward the message to",
-    add_source_info="Whether to add info about the original source (default: True)"
-)
-async def forward_message(
-    interaction: discord.Interaction,
-    source_channel: discord.TextChannel,
-    message_id: str,
-    target_channel: discord.TextChannel,
-    add_source_info: bool = True
-):
-    """Forward a specific message from one channel to another"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-    
-    try:
-        # Check if bot has permission to read source channel
-        if not source_channel.permissions_for(interaction.guild.me).read_messages:
-            await interaction.response.send_message(f"❌ I don't have permission to read messages in {source_channel.mention}", ephemeral=True)
-            return
-            
-        # Check if bot has permission to send to target channel
-        if not target_channel.permissions_for(interaction.guild.me).send_messages:
-            await interaction.response.send_message(f"❌ I don't have permission to send messages in {target_channel.mention}", ephemeral=True)
-            return
-        
-        # Get the message to forward
-        try:
-            message = await source_channel.fetch_message(int(message_id))
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid message ID. Make sure it's a valid number.", ephemeral=True)
-            return
-        except discord.NotFound:
-            await interaction.response.send_message(f"❌ Message not found in {source_channel.mention}. Check the message ID.", ephemeral=True)
-            return
-        
-        # Create forwarded message
-        if message.embeds:
-            # If original message has embeds, forward them
-            for embed in message.embeds:
-                if add_source_info:
-                    # Add source information to the embed
-                    if embed.footer.text:
-                        embed.set_footer(text=f"{embed.footer.text} • Forwarded from #{source_channel.name}")
-                    else:
-                        embed.set_footer(text=f"Forwarded from #{source_channel.name}")
-                
-                await target_channel.send(embed=embed)
-        
-        # Forward text content if exists
-        if message.content:
-            content = message.content
-            
-            if add_source_info:
-                content += f"\n\n*— Forwarded from {source_channel.mention}*"
-            
-            await target_channel.send(content)
-        
-        # Forward attachments if any
-        if message.attachments:
-            attachment_info = f"📎 **Attachments from {source_channel.mention}:**\n"
-            for attachment in message.attachments:
-                attachment_info += f"• [{attachment.filename}]({attachment.url})\n"
-            await target_channel.send(attachment_info)
-        
-        await interaction.response.send_message(
-            f"✅ Message forwarded from {source_channel.mention} to {target_channel.mention}", 
-            ephemeral=True
-        )
-        
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error forwarding message: {e}", ephemeral=True)
-
-@bot.tree.command(name="copy_last_message", description="Copy the last message from one channel to another")
-@app_commands.describe(
-    source_channel="The channel to copy the last message from",
-    target_channel="The channel to copy the message to",
-    message_count="Number of recent messages to copy (default: 1, max: 5)"
-)
-async def copy_last_message(
-    interaction: discord.Interaction,
-    source_channel: discord.TextChannel,
-    target_channel: discord.TextChannel,
-    message_count: int = 1
-):
-    """Copy the last message(s) from one channel to another"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-    
-    if message_count > 5:
-        await interaction.response.send_message("❌ You can only copy up to 5 messages at once.", ephemeral=True)
-        return
-    
-    try:
-        # Check permissions
-        if not source_channel.permissions_for(interaction.guild.me).read_messages:
-            await interaction.response.send_message(f"❌ I don't have permission to read messages in {source_channel.mention}", ephemeral=True)
-            return
-            
-        if not target_channel.permissions_for(interaction.guild.me).send_messages:
-            await interaction.response.send_message(f"❌ I don't have permission to send messages in {target_channel.mention}", ephemeral=True)
-            return
-        
-        # Get recent messages
-        messages = []
-        async for message in source_channel.history(limit=message_count):
-            if not message.author.bot or message.author == interaction.guild.me:  # Skip other bots but allow our own bot
-                messages.append(message)
-            if len(messages) >= message_count:
-                break
-        
-        if not messages:
-            await interaction.response.send_message(f"❌ No recent messages found in {source_channel.mention}", ephemeral=True)
-            return
-        
-        # Copy messages (reverse to maintain chronological order)
-        copied_count = 0
-        for message in reversed(messages):
-            # Copy embeds
-            if message.embeds:
-                for embed in message.embeds:
-                    # Add source info
-                    embed.set_footer(text=f"Copied from #{source_channel.name} • {message.created_at.strftime('%m/%d/%Y %H:%M')}")
-                    await target_channel.send(embed=embed)
-                    copied_count += 1
-            
-            # Copy text content
-            if message.content:
-                content = message.content + f"\n\n*— Copied from {source_channel.mention}*"
-                await target_channel.send(content)
-                copied_count += 1
-            
-            # Copy attachments info
-            if message.attachments:
-                attachment_info = f"📎 **Attachments from {source_channel.mention}:**\n"
-                for attachment in message.attachments:
-                    attachment_info += f"• [{attachment.filename}]({attachment.url})\n"
-                await target_channel.send(attachment_info)
-        
-        await interaction.response.send_message(
-            f"✅ Copied {len(messages)} message(s) from {source_channel.mention} to {target_channel.mention}",
-            ephemeral=True
-        )
-        
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error copying messages: {e}", ephemeral=True)
-
-@bot.tree.command(name="mirror_channel", description="Set up automatic message mirroring between two channels")
-@app_commands.describe(
-    source_channel="The channel to mirror from",
-    target_channel="The channel to mirror to",
-    enable="Enable or disable mirroring (True/False)"
-)
-async def mirror_channel(
-    interaction: discord.Interaction,
-    source_channel: discord.TextChannel,
-    target_channel: discord.TextChannel,
-    enable: bool
-):
-    """Set up automatic message mirroring between two channels"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-    
-    try:
-        # Initialize mirror settings if not exists
-        if not hasattr(bot, 'channel_mirrors'):
-            bot.channel_mirrors = {}
-        
-        if enable:
-            # Check permissions
-            if not source_channel.permissions_for(interaction.guild.me).read_messages:
-                await interaction.response.send_message(f"❌ I don't have permission to read messages in {source_channel.mention}", ephemeral=True)
-                return
-                
-            if not target_channel.permissions_for(interaction.guild.me).send_messages:
-                await interaction.response.send_message(f"❌ I don't have permission to send messages in {target_channel.mention}", ephemeral=True)
-                return
-            
-            bot.channel_mirrors[source_channel.id] = target_channel.id
-            await interaction.response.send_message(
-                f"✅ Mirroring enabled: {source_channel.mention} → {target_channel.mention}",
-                ephemeral=True
-            )
-        else:
-            if source_channel.id in bot.channel_mirrors:
-                del bot.channel_mirrors[source_channel.id]
-                await interaction.response.send_message(
-                    f"✅ Mirroring disabled for {source_channel.mention}",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    f"❌ No mirroring was set up for {source_channel.mention}",
-                    ephemeral=True
-                )
-                
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error setting up mirroring: {e}", ephemeral=True)
-
-# Event listener for automatic message mirroring
-@bot.event
-async def on_message(message):
-    """Handle automatic message mirroring"""
-    # Skip if message is from a bot (prevent loops)
-    if message.author.bot:
-        return
-    
-    # Check if this channel has mirroring enabled
-    if hasattr(bot, 'channel_mirrors') and message.channel.id in bot.channel_mirrors:
-        target_channel_id = bot.channel_mirrors[message.channel.id]
-        target_channel = bot.get_channel(target_channel_id)
-        
-        if target_channel:
-            try:
-                # Mirror the message
-                content = message.content
-                if content:
-                    content += f"\n\n*— Mirrored from {message.channel.mention}*"
-                    await target_channel.send(content)
-                
-                # Mirror embeds
-                for embed in message.embeds:
-                    embed.set_footer(text=f"Mirrored from #{message.channel.name}")
-                    await target_channel.send(embed=embed)
-                
-                # Mirror attachments info
-                if message.attachments:
-                    attachment_info = f"📎 **Attachments from {message.channel.mention}:**\n"
-                    for attachment in message.attachments:
-                        attachment_info += f"• [{attachment.filename}]({attachment.url})\n"
-                    await target_channel.send(attachment_info)
-                    
-            except Exception as e:
-                print(f"Error mirroring message: {e}")
-
-@bot.tree.command(name="get_message_id", description="Get the message ID of recent messages in a channel")
-@app_commands.describe(
-    channel="The channel to get message IDs from (default: current channel)",
-    count="Number of recent messages to show IDs for (default: 5, max: 10)"
-)
-async def get_message_id(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel = None,
-    count: int = 5
-):
-    """Get message IDs from recent messages for easy forwarding"""
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-        return
-    
-    if count > 10:
-        await interaction.response.send_message("❌ You can only get up to 10 message IDs at once.", ephemeral=True)
-        return
-    
-    target_channel = channel or interaction.channel
-    
-    try:
-        # Check permissions
-        if not target_channel.permissions_for(interaction.guild.me).read_messages:
-            await interaction.response.send_message(f"❌ I don't have permission to read messages in {target_channel.mention}", ephemeral=True)
-            return
-        
-        # Get recent messages
-        messages = []
-        async for message in target_channel.history(limit=count):
-            messages.append(message)
-        
-        if not messages:
-            await interaction.response.send_message(f"❌ No messages found in {target_channel.mention}", ephemeral=True)
-            return
-        
-        # Create embed with message IDs
-        embed = discord.Embed(
-            title=f"📋 Recent Message IDs from #{target_channel.name}",
-            description="Use these IDs with `/forward_message` command",
-            color=discord.Color.blue()
-        )
-        
-        for i, message in enumerate(messages[:count], 1):
-            author_name = message.author.display_name
-            content_preview = message.content[:50] + "..." if len(message.content) > 50 else message.content
-            if not content_preview and message.embeds:
-                content_preview = "[Embed Message]"
-            elif not content_preview and message.attachments:
-                content_preview = f"[{len(message.attachments)} Attachment(s)]"
-            elif not content_preview:
-                content_preview = "[Empty Message]"
-            
-            embed.add_field(
-                name=f"#{i} - {author_name}",
-                value=f"**ID:** `{message.id}`\n**Content:** {content_preview}",
-                inline=False
-            )
-        
-        embed.set_footer(text=f"Copy the ID number and use with /forward_message")
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error getting message IDs: {e}", ephemeral=True)
+        await ctx.send(f"❌ Error sending message: {e}")
 
 # Rotating status activities
 ACTIVITIES = [
-    {"name": "helping the server 🛠️", "type": discord.ActivityType.playing},
+    {"name": "DOTGEN.AI server 🛠️", "type": discord.ActivityType.playing},
     {"name": "for new members 👀", "type": discord.ActivityType.watching},
-    {"name": "server members 👥", "type": discord.ActivityType.watching},
-    {"name": "slash commands 💬", "type": discord.ActivityType.listening},
+    {"name": "DOTGEN.AI community 👥", "type": discord.ActivityType.watching},
+    {"name": f"{BOT_PREFIX} commands 💬", "type": discord.ActivityType.listening},
     {"name": "voice channels 🎤", "type": discord.ActivityType.listening},
-    {"name": "announcements 📢", "type": discord.ActivityType.watching},
+    {"name": "DOTGEN.AI announcements 📢", "type": discord.ActivityType.watching},
 ]
 
 # Global variable to track current activity index
@@ -1466,6 +1051,96 @@ async def start_rotating_status():
     # Create and start the background task
     bot.loop.create_task(rotate_status())
 
+@bot.command(name="botstatus", aliases=["activity"])
+@commands.has_permissions(administrator=True)
+async def status_control(ctx, action="current", *, custom_status=None):
+    """Control the bot's rotating status"""
+    action = action.lower()
+    
+    try:
+        if action == "current":
+            # Show current status
+            current_activity = ACTIVITIES[current_activity_index]
+            embed = discord.Embed(
+                title="🎭 Current Bot Status",
+                description=f"**Activity:** {current_activity['name']}\n**Type:** {current_activity['type'].name.title()}",
+                color=discord.Color.blue()
+            )
+            await ctx.send(embed=embed)
+            
+        elif action == "list":
+            # List all available activities
+            embed = discord.Embed(
+                title="📋 Available Status Activities",
+                color=discord.Color.blue()
+            )
+            
+            for i, activity in enumerate(ACTIVITIES):
+                status_indicator = "🔸" if i == current_activity_index else "▫️"
+                embed.add_field(
+                    name=f"{status_indicator} {activity['type'].name.title()}",
+                    value=activity['name'],
+                    inline=False
+                )
+            
+            embed.set_footer(text="🔸 = Currently active activity")
+            await ctx.send(embed=embed)
+            
+        elif action == "stop":
+            # Stop rotating and set a static status
+            static_status = custom_status or "Bot is online"
+            await bot.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name=static_status
+                ),
+                status=discord.Status.online
+            )
+            await ctx.send(f"✅ Rotating status stopped. Set to: **{static_status}**")
+            
+        elif action == "start":
+            # Restart rotating status
+            await start_rotating_status()
+            await ctx.send("✅ Rotating status restarted!")
+            
+        elif action == "custom":
+            # Set custom status
+            if not custom_status:
+                await ctx.send("❌ Please provide a custom status message.")
+                return
+            
+            await bot.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name=custom_status
+                ),
+                status=discord.Status.online
+            )
+            
+            await ctx.send(f"✅ Custom status set: **Watching** {custom_status}")
+            
+        else:
+            await ctx.send(f"❌ Invalid action. Use: `current`, `list`, `start`, `stop`, or `custom`")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error controlling status: {e}")
+
+# Error handling for commands
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You don't have the required permissions to use this command.")
+    elif isinstance(error, commands.CommandNotFound):
+        # Don't respond to unknown commands to avoid spam
+        pass
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Missing required argument. Use `{BOT_PREFIX}help {ctx.command}` for usage.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(f"❌ Invalid argument. Use `{BOT_PREFIX}help {ctx.command}` for usage.")
+    else:
+        await ctx.send(f"❌ An error occurred: {error}")
+        print(f"Command error: {error}")
+
 # Run the bot
 if __name__ == "__main__":
     if not TOKEN:
@@ -1474,7 +1149,7 @@ if __name__ == "__main__":
         print("DISCORD_TOKEN=your_bot_token_here")
         input("Press Enter to exit...")    
     else:
-        print("🤖 Starting XRP Discord Bot...")
+        print("🤖 Starting DOTGEN.AI Discord Bot...")
         print("📋 Configuration loaded:")
         print(f"   - Welcome Channel ID: {WELCOME_CHANNEL_ID or 'Not set'}")
         print(f"   - Lobby Voice Channel ID: {LOBBY_VOICE_CHANNEL_ID or 'Not set'}")
