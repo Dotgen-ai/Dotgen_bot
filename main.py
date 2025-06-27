@@ -4,6 +4,7 @@ import asyncio
 import random
 import os
 import re
+import sys
 from dotenv import load_dotenv
 import threading
 from datetime import datetime
@@ -1308,7 +1309,7 @@ if __name__ == "__main__":
         print("❌ DISCORD_TOKEN not found in environment variables!")
         print("Please create a .env file with your bot token:")
         print("DISCORD_TOKEN=your_bot_token_here")
-        input("Press Enter to exit...")    
+        sys.exit(1)
     else:
         print("🤖 Starting DOTGEN.AI Discord Bot...")
         print("📋 Configuration loaded:")
@@ -1352,12 +1353,12 @@ if __name__ == "__main__":
             print()
             print("🆘 Alternative: The bot will automatically run in limited mode")
             print("   if privileged intents are not available.")
-            input("Press Enter to exit...")
+            sys.exit(1)
         except discord.errors.LoginFailure:
             print("\n❌ LOGIN FAILED!")
             print("🔧 Check that your bot token is correct in the .env file")
-            input("Press Enter to exit...")
+            sys.exit(1)
         except Exception as e:
             print(f"\n❌ UNEXPECTED ERROR: {e}")
             print("🔧 Please check your internet connection and try again")
-            input("Press Enter to exit...")
+            sys.exit(1)
