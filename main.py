@@ -1205,27 +1205,72 @@ if FLASK_AVAILABLE:
 
     @app.route('/')
     def home():
-        """Health check endpoint for the webserver"""
+        """Main health check endpoint for the webserver"""
         return jsonify({
             "status": "online",
             "bot": "DOTGEN.AI Discord Bot",
+            "version": "2.0",
             "timestamp": datetime.now().isoformat(),
-            "message": "Bot is running!"
+            "uptime": "operational",
+            "message": "Bot is running and ready!",
+            "endpoints": {
+                "health": "/health",
+                "ping": "/ping", 
+                "keepalive": "/keepalive",
+                "status": "/status"
+            }
         })
 
     @app.route('/health')
     def health():
-        """Health endpoint for uptime monitoring"""
+        """Health endpoint for uptime monitoring (UptimeRobot compatible)"""
         return jsonify({
             "status": "healthy",
             "uptime": "operational",
-            "service": "DOTGEN.AI Bot"
+            "service": "DOTGEN.AI Bot",
+            "timestamp": datetime.now().isoformat()
         })
 
     @app.route('/ping')
     def ping():
-        """Simple ping endpoint"""
+        """Simple ping endpoint (returns plain text)"""
         return "pong"
+    
+    @app.route('/keepalive')
+    def keepalive():
+        """Keep-alive endpoint specifically for UptimeRobot"""
+        return jsonify({
+            "alive": True,
+            "service": "DOTGEN.AI Discord Bot",
+            "timestamp": datetime.now().isoformat(),
+            "message": "Service is alive and running"
+        })
+    
+    @app.route('/status')
+    def status():
+        """Detailed status endpoint with bot information"""
+        try:
+            guild_count = len(bot.guilds) if bot.is_ready() else 0
+            temp_channels = len(temp_voice_channels)
+            
+            return jsonify({
+                "bot_status": "online" if bot.is_ready() else "starting",
+                "discord_connected": bot.is_ready(),
+                "guilds": guild_count,
+                "temp_voice_channels": temp_channels,
+                "privileged_intents": privileged_intents_available,
+                "flask_available": FLASK_AVAILABLE,
+                "timestamp": datetime.now().isoformat(),
+                "version": "2.0",
+                "service": "DOTGEN.AI Bot"
+            })
+        except Exception as e:
+            return jsonify({
+                "bot_status": "error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "service": "DOTGEN.AI Bot"
+            }), 500
 
     def run_webserver():
         """Run the Flask webserver in a separate thread"""
