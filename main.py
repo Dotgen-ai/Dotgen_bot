@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import asyncio
 import random
 import os
@@ -8,6 +9,9 @@ import sys
 from dotenv import load_dotenv
 import threading
 from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
+import requests
+import io
 
 # Optional Flask import for webserver (for 24/7 deployment)
 try:
@@ -29,8 +33,17 @@ VOICE_LOG_CHANNEL_ID = int(os.getenv('VOICE_LOG_CHANNEL_ID', 0)) or None
 VOICE_CATEGORY_ID = int(os.getenv('VOICE_CATEGORY_ID', 0)) or None
 GUILD_ID = int(os.getenv('GUILD_ID', 0)) or None
 DEFAULT_ROLE_ID = int(os.getenv('DEFAULT_ROLE_ID', 0)) or None
+AUTO_ROLE_ID = int(os.getenv('AUTO_ROLE_ID', 0)) or None  # Role to give to new members
 BOT_PREFIX = os.getenv('BOT_PREFIX', '!')
 MAX_VOICE_LIMIT = int(os.getenv('MAX_VOICE_CHANNEL_LIMIT', 10))
+
+# Parse specific VC roles from environment variable (multiple roles allowed)
+SPECIFIC_VC_ROLE_IDS = []
+if os.getenv('SPECIFIC_VC_ROLE_IDS'):
+    try:
+        SPECIFIC_VC_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('SPECIFIC_VC_ROLE_IDS').split(',') if role_id.strip()]
+    except ValueError:
+        print("⚠️  Invalid SPECIFIC_VC_ROLE_IDS format in .env file. Should be comma-separated role IDs.")
 
 # Parse allowed roles from environment variable
 ALLOWED_ROLES = []
@@ -52,10 +65,12 @@ try:
 except:
     privileged_intents_available = False
 
-bot = commands.Bot(command_prefix=BOT_PREFIX, intents=intents)
+# Remove default help command to create our own dynamic one
+bot = commands.Bot(command_prefix=BOT_PREFIX, intents=intents, help_command=None)
 
-# Store temporary voice channels for cleanup
+# Store temporary voice channels for cleanup and role-based grouping
 temp_voice_channels = {}
+role_voice_channels = {}  # Track voice channels by role
 
 # Welcome messages templates
 WELCOME_MESSAGES = [
@@ -70,6 +85,96 @@ WELCOME_MESSAGES = [
     "⚡ {member} has charged into our server! Welcome!",
     "🎪 Step right up, {member}! Welcome to the greatest server on Earth!"
 ]
+
+# Welcome image generation
+async def create_welcome_image(member):
+    """Create a welcome image with member's avatar and background"""
+    try:
+        # Create a 800x400 background image
+        width, height = 800, 400
+        background = Image.new('RGB', (width, height), color=(47, 49, 54))  # Discord dark theme color
+        
+        # Create drawing context
+        draw = ImageDraw.Draw(background)
+        
+        # Try to get member's avatar
+        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+        
+        try:
+            # Download avatar
+            response = requests.get(avatar_url, timeout=10)
+            avatar_image = Image.open(io.BytesIO(response.content))
+            
+            # Resize and make circular
+            avatar_size = 150
+            avatar_image = avatar_image.resize((avatar_size, avatar_size))
+            
+            # Create circular mask
+            mask = Image.new('L', (avatar_size, avatar_size), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+            
+            # Apply mask to avatar
+            avatar_image.putalpha(mask)
+            
+            # Paste avatar on background
+            avatar_x = (width - avatar_size) // 2
+            avatar_y = 50
+            background.paste(avatar_image, (avatar_x, avatar_y), avatar_image)
+            
+        except Exception as e:
+            print(f"Error loading avatar: {e}")
+            # Draw a default circle if avatar fails
+            avatar_x = (width - 150) // 2
+            avatar_y = 50
+            draw.ellipse([avatar_x, avatar_y, avatar_x + 150, avatar_y + 150], fill=(114, 137, 218))
+        
+        # Add welcome text
+        try:
+            # Try to use a nice font, fallback to default
+            font_large = ImageFont.truetype("arial.ttf", 48)
+            font_medium = ImageFont.truetype("arial.ttf", 32)
+            font_small = ImageFont.truetype("arial.ttf", 24)
+        except:
+            # Use default font if custom font not available
+            font_large = ImageFont.load_default()
+            font_medium = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        
+        # Welcome text
+        welcome_text = "Welcome!"
+        text_bbox = draw.textbbox((0, 0), welcome_text, font=font_large)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_x = (width - text_width) // 2
+        draw.text((text_x, 220), welcome_text, fill=(255, 255, 255), font=font_large)
+        
+        # Member name
+        member_name = member.display_name
+        if len(member_name) > 20:
+            member_name = member_name[:17] + "..."
+        
+        name_bbox = draw.textbbox((0, 0), member_name, font=font_medium)
+        name_width = name_bbox[2] - name_bbox[0]
+        name_x = (width - name_width) // 2
+        draw.text((name_x, 280), member_name, fill=(114, 137, 218), font=font_medium)
+        
+        # Server info
+        server_text = f"You're member #{len(member.guild.members)}"
+        server_bbox = draw.textbbox((0, 0), server_text, font=font_small)
+        server_width = server_bbox[2] - server_bbox[0]
+        server_x = (width - server_width) // 2
+        draw.text((server_x, 330), server_text, fill=(153, 170, 181), font=font_small)
+        
+        # Save to bytes
+        img_bytes = io.BytesIO()
+        background.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return discord.File(img_bytes, filename='welcome.png')
+        
+    except Exception as e:
+        print(f"Error creating welcome image: {e}")
+        return None
 
 @bot.event
 async def on_ready():
@@ -126,6 +231,20 @@ async def on_ready():
         print("✅ Rotating bot status started successfully")
     except Exception as e:
         print(f"⚠️  Could not start rotating status: {e}")
+    
+    # Sync slash commands
+    try:
+        if GUILD_ID:
+            # Sync to specific guild for faster updates during development
+            guild = discord.Object(id=GUILD_ID)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"✅ Synced {len(synced)} slash command(s) to guild {GUILD_ID}")
+        else:
+            # Sync globally (takes up to 1 hour to propagate)
+            synced = await bot.tree.sync()
+            print(f"✅ Synced {len(synced)} slash command(s) globally")
+    except Exception as e:
+        print(f"⚠️  Failed to sync slash commands: {e}")
     
     print("🚀 Bot is ready to use!")
     print(f"💡 Use {BOT_PREFIX}config to check your configuration")
@@ -185,6 +304,16 @@ async def on_member_join(member):
         return  # Skip if privileged intents aren't available
         
     try:
+        # Auto-assign role if configured
+        if AUTO_ROLE_ID:
+            role = member.guild.get_role(AUTO_ROLE_ID)
+            if role:
+                try:
+                    await member.add_roles(role)
+                    print(f"✅ Auto-assigned role @{role.name} to {member.display_name}")
+                except Exception as e:
+                    print(f"❌ Failed to assign auto-role to {member.display_name}: {e}")
+        
         # Get the welcome channel from environment variable first
         welcome_channel = None
         
@@ -202,12 +331,13 @@ async def on_member_join(member):
                     if channel.name.lower() in ['welcome', 'general', 'lobby', 'entrance']:
                         welcome_channel = channel
                         break
-                
-                # If no common channel found, use the first available text channel
                 if not welcome_channel and member.guild.text_channels:
                     welcome_channel = member.guild.text_channels[0]
         
         if welcome_channel:
+            # Create welcome image
+            welcome_image = await create_welcome_image(member)
+            
             # Select a random welcome message
             welcome_msg = random.choice(WELCOME_MESSAGES).format(member=member.mention)
             
@@ -217,7 +347,12 @@ async def on_member_join(member):
                 description=welcome_msg,
                 color=discord.Color.gold()
             )
-            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+            
+            if welcome_image:
+                embed.set_image(url="attachment://welcome.png")
+            else:
+                embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+            
             embed.add_field(
                 name="Member Count", 
                 value=f"You're member #{len(member.guild.members)}!", 
@@ -230,7 +365,11 @@ async def on_member_join(member):
             )
             embed.set_footer(text=f"Welcome to {member.guild.name}!")
             
-            await welcome_channel.send(embed=embed)
+            # Send welcome message with or without image
+            if welcome_image:
+                await welcome_channel.send(file=welcome_image, embed=embed)
+            else:
+                await welcome_channel.send(embed=embed)
             
     except Exception as e:
         print(f"Error sending welcome message: {e}")
@@ -254,12 +393,80 @@ async def on_voice_state_update(member, before, after):
         print(f"Error in voice state update: {e}")
 
 async def handle_voice_channel_creation(member, lobby_channel):
-    """Create a new voice channel based on the member's highest role"""
+    """Create a new voice channel based on the member's specific role"""
     try:
         guild = member.guild
         
-        # Check if member has required roles (if ALLOWED_ROLES is configured)
-        if ALLOWED_ROLES:
+        # Check if SPECIFIC_VC_ROLE_IDS is configured - only these roles can create VCs
+        if SPECIFIC_VC_ROLE_IDS:
+            # Find which specific role the member has (if any)
+            member_specific_roles = []
+            for role_id in SPECIFIC_VC_ROLE_IDS:
+                role = guild.get_role(role_id)
+                if role and role in member.roles:
+                    member_specific_roles.append(role)
+            
+            # Check if member has any of the specific roles
+            if not member_specific_roles:
+                # Get role names for error message
+                specific_role_names = []
+                for role_id in SPECIFIC_VC_ROLE_IDS:
+                    role = guild.get_role(role_id)
+                    if role:
+                        specific_role_names.append(f"@{role.name}")
+                
+                # Send notification that user doesn't have permission
+                try:
+                    roles_text = ", ".join(specific_role_names)
+                    await member.send(f"❌ Only members with these roles can create voice channels: {roles_text}")
+                except:
+                    pass  # Can't send DM
+                
+                # Log the attempt
+                log_channel = bot.get_channel(VOICE_LOG_CHANNEL_ID) if VOICE_LOG_CHANNEL_ID else None
+                if log_channel:
+                    embed = discord.Embed(
+                        title="🚫 Voice Channel Creation Denied",
+                        description=f"{member.mention} tried to create a voice channel but doesn't have any required roles.",
+                        color=discord.Color.red()
+                    )
+                    embed.add_field(name="User", value=f"{member.mention} ({member.display_name})", inline=True)
+                    embed.add_field(name="Required Roles", value=", ".join(specific_role_names), inline=True)
+                    await log_channel.send(embed=embed, delete_after=60)
+                
+                return  # Don't create the channel
+            
+            # Use the highest priority role (first one found)
+            target_role = member_specific_roles[0]
+            
+            # Check if there's already a VC for this specific role
+            role_name = target_role.name
+            if target_role.id in role_voice_channels:
+                existing_channel = role_voice_channels[target_role.id]
+                # Check if the channel still exists
+                if existing_channel and existing_channel.id in temp_voice_channels:
+                    try:
+                        # Move member to existing channel
+                        await member.move_to(existing_channel)
+                        
+                        # Notify in log channel
+                        log_channel = bot.get_channel(VOICE_LOG_CHANNEL_ID) if VOICE_LOG_CHANNEL_ID else None
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="🎤 Joined Existing Voice Channel",
+                                description=f"{member.mention} joined the existing @{role_name} voice channel",
+                                color=target_role.color
+                            )
+                            await log_channel.send(embed=embed, delete_after=120)
+                        
+                        return
+                    except Exception as e:
+                        print(f"Error moving member to existing channel: {e}")
+                        # Remove invalid channel from tracking
+                        del role_voice_channels[target_role.id]
+        
+        # Fallback to old system if SPECIFIC_VC_ROLE_ID is not configured
+        elif ALLOWED_ROLES:
             member_role_ids = [role.id for role in member.roles]
             has_allowed_role = any(role_id in member_role_ids for role_id in ALLOWED_ROLES)
             
@@ -284,18 +491,24 @@ async def handle_voice_channel_creation(member, lobby_channel):
                 
                 return  # Don't create the channel
         
-        # Get the member's highest role (excluding @everyone)
-        highest_role = None
-        for role in reversed(member.roles):
-            if role.name != "@everyone":
-                highest_role = role
-                break
-        
-        # Use default role if configured and no specific role found
-        if not highest_role and DEFAULT_ROLE_ID:
-            highest_role = guild.get_role(DEFAULT_ROLE_ID)
-        
-        role_name = highest_role.name if highest_role else "Member"
+        # Determine which role to use for the channel
+        if SPECIFIC_VC_ROLE_IDS:
+            # Use the specific role for channel creation (already found above)
+            role_name = target_role.name if target_role else "Member"
+            highest_role = target_role
+        else:
+            # Get the member's highest role (excluding @everyone) - old system
+            highest_role = None
+            for role in reversed(member.roles):
+                if role.name != "@everyone":
+                    highest_role = role
+                    break
+            
+            # Use default role if configured and no specific role found
+            if not highest_role and DEFAULT_ROLE_ID:
+                highest_role = guild.get_role(DEFAULT_ROLE_ID)
+            
+            role_name = highest_role.name if highest_role else "Member"
         
         # Create a unique channel name
         channel_name = f"{role_name}'s VC"
@@ -340,13 +553,17 @@ async def handle_voice_channel_creation(member, lobby_channel):
         # Move the member to the new channel
         await member.move_to(new_channel)
         
-        # Store the channel for cleanup
+        # Store the channel for cleanup and role tracking
         temp_voice_channels[new_channel.id] = {
             'channel': new_channel,
             'creator': member.id,
             'role': role_name,
             'created_at': discord.utils.utcnow()
         }
+        
+        # Track channel by role if using specific role system
+        if SPECIFIC_VC_ROLE_IDS and highest_role:
+            role_voice_channels[highest_role.id] = new_channel
         
         # Send a notification to voice log channel (separate from welcome channel)
         log_channel = None
@@ -642,8 +859,14 @@ async def bot_info(ctx):
     """Display bot information and features"""
     embed = discord.Embed(
         title="🤖 DOTGEN.AI Discord Bot",
-        description=f"Advanced Discord bot with dynamic voice channels and welcome system!{' (Limited Mode)' if not privileged_intents_available else ''}",
+        description=f"Advanced Discord bot with slash commands, dynamic voice channels and welcome system!{' (Limited Mode)' if not privileged_intents_available else ''}",
         color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="🚀 Modern Command Interface",
+        value="**This bot uses slash commands for the best experience!**\n\nType `/` and look for `dotgen_` commands for full functionality.",
+        inline=False
     )
     
     if privileged_intents_available:
@@ -655,7 +878,7 @@ async def bot_info(ctx):
     else:
         embed.add_field(
             name="🎉 Welcome System",
-            value=f"Use `{BOT_PREFIX}welcome @member` to send welcome messages",
+            value="Use `/dotgen_welcome @member` to send welcome messages",
             inline=False
         )
     
@@ -665,39 +888,54 @@ async def bot_info(ctx):
         inline=False
     )
     
-    embed.add_field(
-        name="📊 Stats",
-        value=f"**Servers:** {len(bot.guilds)}\n**Temp Channels:** {len(temp_voice_channels)}",
-        inline=True
-    )
+    # Dynamically generate command categories
+    general_cmds = []
+    admin_cmds = []
     
-    admin_commands = [
-        f"`{BOT_PREFIX}setup_lobby` - Setup voice channel lobby",
-        f"`{BOT_PREFIX}cleanup` - Clean empty channels",
-        f"`{BOT_PREFIX}welcome @member` - Send welcome message",
-        f"`{BOT_PREFIX}get_ids` - Get channel/server IDs",
-        f"`{BOT_PREFIX}config` - Check configuration",
-        f"`{BOT_PREFIX}add_role @role` - Add allowed role",
-        f"`{BOT_PREFIX}remove_role @role` - Remove allowed role",
-        f"`{BOT_PREFIX}list_roles` - List allowed roles",
-        f"`{BOT_PREFIX}voice_stats` - Voice channel statistics",
-        f"`{BOT_PREFIX}send <#channel> <message>` - Send message",
-        f"`{BOT_PREFIX}announce <#channel> <message>` - Send announcement to specific channel",
-        f"`{BOT_PREFIX}announce_all <message>` - Send announcement to all announcement channels",
-        f"`{BOT_PREFIX}echo <message>` - Make bot repeat message",
-        f"`{BOT_PREFIX}botstatus <action>` - Control bot status"
-    ]
-    
-    embed.add_field(
-        name="🛠️ Admin Commands",
-        value="\n".join(admin_commands),
-        inline=False
-    )
+    for command in bot.commands:
+        if command.name in ["bot_info", "help"]:
+            continue  # Skip info and help commands in listings
+            
+        # Check if it's an admin command by looking at decorators/checks
+        is_admin = any(check.__name__ in ['has_permissions', 'is_owner'] for check in getattr(command, 'checks', []))
+        
+        cmd_line = f"`{BOT_PREFIX}{command.name}`"
+        if command.aliases:
+            cmd_line += f" (aliases: {', '.join(command.aliases)})"
+        
+        if command.help:
+            short_help = command.help.split('\n')[0]
+            if len(short_help) > 60:
+                short_help = short_help[:57] + "..."
+            cmd_line += f" - {short_help}"
+        
+        if is_admin:
+            admin_cmds.append(cmd_line)
+        else:
+            general_cmds.append(cmd_line)
     
     embed.add_field(
         name="📖 General Commands",
-        value=f"`{BOT_PREFIX}info` - Show this information\n`{BOT_PREFIX}ping` - Check bot latency",
+        value="\n".join(sorted(general_cmds)) if general_cmds else "None available",
         inline=False
+    )
+    
+    embed.add_field(
+        name="🛠️ Admin Commands",
+        value="\n".join(sorted(admin_cmds)) if admin_cmds else "None available",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="� Stats",
+        value=f"**Servers:** {len(bot.guilds)}\n**Commands:** {len(list(bot.commands))}\n**Temp Channels:** {len(temp_voice_channels)}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="⚡ Quick Start",
+        value=f"`{BOT_PREFIX}help` - View all commands\n`{BOT_PREFIX}help <command>` - Detailed help\n`/dotgen_` - Slash commands",
+        inline=True
     )
     
     if not privileged_intents_available:
@@ -706,6 +944,8 @@ async def bot_info(ctx):
             value="To enable automatic welcome messages, enable privileged intents in Discord Developer Portal",
             inline=False
         )
+    
+    embed.set_footer(text="💡 Use /dotgen_help for complete command list with slash commands!")
     
     await ctx.send(embed=embed)
 
@@ -718,6 +958,89 @@ async def ping(ctx):
         description=f"Bot latency: **{latency}ms**",
         color=discord.Color.green() if latency < 100 else discord.Color.orange() if latency < 200 else discord.Color.red()
     )
+    await ctx.send(embed=embed)
+
+@bot.command(name="help")
+async def help_command(ctx, *, command_name: str = None):
+    """Dynamic help command that lists all available commands"""
+    if command_name:
+        # Show help for specific command
+        cmd = bot.get_command(command_name.lower())
+        if cmd:
+            embed = discord.Embed(
+                title=f"📖 Help: {BOT_PREFIX}{cmd.name}",
+                description=cmd.help or "No description available.",
+                color=discord.Color.blue()
+            )
+            
+            if cmd.aliases:
+                embed.add_field(
+                    name="Aliases",
+                    value=", ".join([f"`{BOT_PREFIX}{alias}`" for alias in cmd.aliases]),
+                    inline=False
+                )
+            
+            # Add usage information if available
+            if cmd.signature:
+                embed.add_field(
+                    name="Usage",
+                    value=f"`{BOT_PREFIX}{cmd.name} {cmd.signature}`",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Usage",
+                    value=f"`{BOT_PREFIX}{cmd.name}`",
+                    inline=False
+                )
+                
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"❌ Command `{command_name}` not found. Use `/help` (slash command) to see all commands.")
+        return
+    
+    # Redirect to slash commands
+    embed = discord.Embed(
+        title="📖 DOTGEN.AI Bot Commands",
+        description="**This bot primarily uses slash commands for the best experience!**",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="🚀 Primary Command Interface",
+        value="**Use `/` (slash commands) for all bot functions!**\n\nType `/` in chat and look for commands starting with `dotgen_`",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="⚡ Essential Slash Commands",
+        value="`/dotgen_help` - Complete help & command list\n`/dotgen_info` - Bot information\n`/dotgen_ping` - Check bot status\n`/dotgen_config` - View configuration\n`/dotgen_welcome` - Send welcome message",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎯 Quick Start",
+        value="1. Type `/` in chat\n2. Look for `dotgen_` commands\n3. Use `/dotgen_help` for complete list\n4. Tab completion shows all options!",
+        inline=False
+    )
+    
+    # Show limited prefix commands that still exist
+    prefix_cmds = [cmd.name for cmd in bot.commands if cmd.name not in ['help', 'bot_info']]
+    if prefix_cmds:
+        embed.add_field(
+            name="⚠️ Legacy Prefix Commands",
+            value=f"Some admin commands still use `{BOT_PREFIX}` prefix, but **slash commands are recommended**.\nUse `/dotgen_help` for the complete list.",
+            inline=False
+        )
+    
+    embed.add_field(
+        name="📊 Stats",
+        value=f"**Slash Commands:** Available via `/dotgen_`\n**Servers:** {len(bot.guilds)}",
+        inline=True
+    )
+    
+    embed.set_footer(text="💡 Slash commands provide better autocomplete, validation, and user experience!")
+    
     await ctx.send(embed=embed)
 
 @bot.command(name="add_role")
@@ -1054,7 +1377,7 @@ async def echo(ctx, *, message):
 
 # Rotating status activities
 ACTIVITIES = [
-    {"name": "DOTGEN.AI server 🛠️", "type": discord.ActivityType.playing},
+    {"name": "DOTGEN.AI server 🛠️", "type": discord.ActivityType.watching},
     {"name": "for new members 👀", "type": discord.ActivityType.watching},
     {"name": "DOTGEN.AI community 👥", "type": discord.ActivityType.watching},
     {"name": f"{BOT_PREFIX} commands 💬", "type": discord.ActivityType.listening},
@@ -1362,3 +1685,339 @@ if __name__ == "__main__":
             print(f"\n❌ UNEXPECTED ERROR: {e}")
             print("🔧 Please check your internet connection and try again")
             sys.exit(1)
+
+# =============================================================================
+# SLASH COMMANDS - Modern Discord commands that don't conflict with Discord
+# =============================================================================
+
+# Create guild object for slash commands
+guild_obj = discord.Object(id=GUILD_ID) if GUILD_ID else None
+
+@bot.tree.command(name="dotgen_ping", description="Check bot latency and status", guild=guild_obj)
+async def slash_ping(interaction: discord.Interaction):
+    """Slash command to check bot latency"""
+    latency = round(bot.latency * 1000)
+    embed = discord.Embed(
+        title="🏓 Pong!",
+        description=f"Bot latency: **{latency}ms**",
+        color=discord.Color.green() if latency < 100 else discord.Color.orange() if latency < 200 else discord.Color.red()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+@bot.tree.command(name="dotgen_info", description="Display bot information and features", guild=guild_obj)
+async def slash_info(interaction: discord.Interaction):
+    """Slash command for bot info"""
+    embed = discord.Embed(
+        title="🤖 DOTGEN.AI Discord Bot",
+        description=f"Advanced Discord bot with dynamic voice channels and welcome system!{' (Limited Mode)' if not privileged_intents_available else ''}",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="🎤 Dynamic Voice Channels",
+        value="Join the 'Join to Create' channel to create role-based temporary voice channels",
+        inline=False
+    )
+    
+    # Count available commands dynamically
+    prefix_commands = len(list(bot.commands))
+    slash_commands = len([cmd for cmd in bot.tree.get_commands(guild=interaction.guild)])
+    
+    embed.add_field(
+        name="⚡ Commands Available",
+        value=f"**Prefix Commands:** {prefix_commands} (use `{BOT_PREFIX}help`)\n**Slash Commands:** {slash_commands} (type `/dotgen_`)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎉 Key Features",
+        value="• Auto Welcome Messages\n• Dynamic Voice Channels\n• Admin Management Tools\n• 24/7 Uptime Monitoring\n• Role-Based Access Control",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📊 Stats",
+        value=f"**Servers:** {len(bot.guilds)}\n**Active Temp Channels:** {len(temp_voice_channels)}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🔗 Quick Links",
+        value=f"`{BOT_PREFIX}help` - All commands\n`{BOT_PREFIX}config` - Bot settings\n`{BOT_PREFIX}ping` - Bot status",
+        inline=True
+    )
+    
+    embed.set_footer(text="Use prefix commands (!) or slash commands (/dotgen_) for full functionality")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="dotgen_welcome", description="Send a welcome message for a member", guild=guild_obj)
+@app_commands.describe(member="The member to welcome")
+async def slash_welcome(interaction: discord.Interaction, member: discord.Member = None):
+    """Slash command to welcome a member"""
+    if not member:
+        member = interaction.user
+    
+    # Check permissions
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ You need 'Manage Messages' permission to use this command.", ephemeral=True)
+        return
+    
+    try:
+        # Get the welcome channel
+        welcome_channel = interaction.channel
+        if WELCOME_CHANNEL_ID:
+            welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID) or interaction.channel
+        
+        # Create welcome image
+        welcome_image = await create_welcome_image(member)
+        
+        # Create a welcome embed
+        welcome_msg = random.choice(WELCOME_MESSAGES).format(member=member.mention)
+        embed = discord.Embed(
+            title="🎉 Welcome Message!",
+            description=welcome_msg,
+            color=discord.Color.gold()
+        )
+        
+        if welcome_image:
+            embed.set_image(url="attachment://welcome.png")
+        else:
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+        
+        embed.add_field(
+            name="Account Created", 
+            value=discord.utils.format_dt(member.created_at, style='R'), 
+            inline=True
+        )
+        embed.set_footer(text=f"Welcome to {interaction.guild.name}!")
+        
+        # Send welcome message
+        if welcome_image:
+            await welcome_channel.send(file=welcome_image, embed=embed)
+        else:
+            await welcome_channel.send(embed=embed)
+        
+        if welcome_channel != interaction.channel:
+            await interaction.response.send_message(f"✅ Welcome message sent to {welcome_channel.mention} for {member.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ Welcome message sent!", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error sending welcome message: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_announce", description="Send an announcement to a specific channel", guild=guild_obj)
+@app_commands.describe(channel="The channel to send the announcement to", message="The announcement message")
+async def slash_announce(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    """Slash command to send announcements"""
+    # Check permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        # Check if bot has permission to send messages in the target channel
+        if not channel.permissions_for(interaction.guild.me).send_messages:
+            await interaction.response.send_message(f"❌ I don't have permission to send messages in {channel.mention}", ephemeral=True)
+            return
+        
+        # Create announcement embed
+        embed = discord.Embed(
+            title="📢 Server Announcement",
+            description=message,
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text=f"Announced by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
+        
+        # Send the announcement
+        await channel.send(embed=embed)
+        
+        # Confirm to the user
+        await interaction.response.send_message(f"✅ Announcement sent to {channel.mention}", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error sending announcement: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_config", description="Check the current bot configuration", guild=guild_obj)
+async def slash_config(interaction: discord.Interaction):
+    """Slash command to check bot configuration"""
+    # Check permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to view configuration.", ephemeral=True)
+        return
+    
+    try:
+        embed = discord.Embed(
+            title="⚙️ Configuration Status",
+            description="Current bot configuration from .env file:",
+            color=discord.Color.orange()
+        )
+        
+        # Check welcome channel
+        welcome_status = "❌ Not Set"
+        if WELCOME_CHANNEL_ID:
+            channel = bot.get_channel(WELCOME_CHANNEL_ID)
+            welcome_status = f"✅ #{channel.name}" if channel else "❌ Invalid ID"
+        embed.add_field(
+            name="💬 Welcome Channel",
+            value=welcome_status,
+            inline=True
+        )
+        
+        # Check auto-role
+        auto_role_status = "❌ Not Set"
+        if AUTO_ROLE_ID:
+            role = interaction.guild.get_role(AUTO_ROLE_ID)
+            auto_role_status = f"✅ @{role.name}" if role else "❌ Invalid ID"
+        embed.add_field(
+            name="🎭 Auto Role",
+            value=auto_role_status,
+            inline=True
+        )
+        
+        # Check specific VC roles
+        vc_role_status = "❌ Not Set (Uses ALLOWED_ROLES)"
+        if SPECIFIC_VC_ROLE_IDS:
+            valid_roles = []
+            for role_id in SPECIFIC_VC_ROLE_IDS:
+                role = interaction.guild.get_role(role_id)
+                if role:
+                    valid_roles.append(f"@{role.name}")
+            if valid_roles:
+                vc_role_status = f"✅ {', '.join(valid_roles[:3])}"
+                if len(valid_roles) > 3:
+                    vc_role_status += f" +{len(valid_roles) - 3} more"
+            else:
+                vc_role_status = "❌ Invalid role IDs"
+        embed.add_field(
+            name="🎤 Specific VC Roles",
+            value=vc_role_status,
+            inline=True
+        )
+        
+        # Other settings
+        embed.add_field(
+            name="🔧 Other Settings",
+            value=f"**Prefix:** `{BOT_PREFIX}`\n**Voice Limit:** {MAX_VOICE_LIMIT}",
+            inline=True
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error checking configuration: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_help", description="Show all available commands and help information", guild=guild_obj)
+@app_commands.describe(command="Optional: Get detailed help for a specific command")
+async def slash_help(interaction: discord.Interaction, command: str = None):
+    """Slash command for dynamic help - PRIMARY COMMAND INTERFACE"""
+    if command:
+        # Show help for specific command
+        cmd = bot.get_command(command.lower())
+        if cmd:
+            embed = discord.Embed(
+                title=f"📖 Help: /{cmd.name}",
+                description=cmd.help or "No description available.",
+                color=discord.Color.blue()
+            )
+            
+            if cmd.aliases:
+                embed.add_field(
+                    name="Aliases",
+                    value=", ".join([f"`/{alias}`" for alias in cmd.aliases]),
+                    inline=False
+                )
+            
+            # Add usage information
+            if cmd.signature:
+                embed.add_field(
+                    name="Usage",
+                    value=f"`/{cmd.name} {cmd.signature}`",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Usage",
+                    value=f"`/{cmd.name}`",
+                    inline=False
+                )
+                
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Command `{command}` not found. Use `/dotgen_help` to see all commands.", ephemeral=True)
+        return
+    
+    # Generate comprehensive slash command help
+    embed = discord.Embed(
+        title="📖 DOTGEN.AI Bot Commands",
+        description="**Complete command list - Slash commands provide the best experience!**",
+        color=discord.Color.blue()
+    )
+    
+    # Show all available slash commands
+    slash_cmds = []
+    for cmd in bot.tree.get_commands(guild=interaction.guild):
+        cmd_info = f"`/{cmd.name}`"
+        if hasattr(cmd, 'description') and cmd.description:
+            desc = cmd.description
+            if len(desc) > 60:
+                desc = desc[:57] + "..."
+            cmd_info += f" - {desc}"
+        slash_cmds.append(cmd_info)
+    
+    if slash_cmds:
+        # Split into chunks if too many commands
+        chunks = [slash_cmds[i:i+8] for i in range(0, len(slash_cmds), 8)]
+        for i, chunk in enumerate(chunks[:3]):  # Show up to 3 chunks
+            title = "⚡ Primary Slash Commands" if i == 0 else f"⚡ More Slash Commands ({i+1})"
+            embed.add_field(name=title, value="\n".join(chunk), inline=False)
+    
+    # Show essential commands prominently
+    embed.add_field(
+        name="🎯 Most Important Commands",
+        value="`/dotgen_info` - Bot information & features\n`/dotgen_ping` - Check bot status\n`/dotgen_config` - View configuration\n`/dotgen_welcome` - Send welcome message\n`/dotgen_announce` - Send announcements",
+        inline=False
+    )
+    
+    # Show prefix commands as legacy
+    prefix_commands = [cmd.name for cmd in bot.commands if cmd.name not in ['help', 'bot_info']]
+    if prefix_commands:
+        legacy_list = [f"`/{name}`" for name in sorted(prefix_commands)[:6]]
+        embed.add_field(
+            name="🔧 Legacy Prefix Commands (Admin)",
+            value=f"Some admin commands still use `{BOT_PREFIX}` prefix:\n" + " • ".join(legacy_list),
+            inline=False
+        )
+    
+    embed.add_field(
+        name="💡 Pro Tips",
+        value="• Slash commands provide autocomplete - just type `/` and start typing!\n• Tab completion shows all available options\n• Slash commands validate input automatically\n• Use `/dotgen_help <command>` for detailed help",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📊 Command Stats",
+        value=f"**Slash Commands:** {len(slash_cmds)}\n**Legacy Prefix:** {len(prefix_commands)}\n**Servers:** {len(bot.guilds)}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🚀 Quick Start",
+        value="1. Type `/` in any chat\n2. Look for `dotgen_` commands\n3. Use Tab for autocomplete\n4. Enjoy better UX!",
+        inline=True
+    )
+    
+    embed.set_footer(text="🌟 Slash commands are the future of Discord bots - enjoy the improved experience!")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# =============================================================================
+# END SLASH COMMANDS
+# =============================================================================
+
+# This is the end of the file. The bot code above this line is responsible for
+# the main functionality of the DOTGEN.AI Discord bot, including dynamic voice
+# channels, welcome messages, and administrative commands. The bot also includes
+# a webserver for 24/7 operation on cloud platforms, and uses advanced features
+# like privileged intents and rotating status messages.
