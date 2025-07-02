@@ -13,6 +13,22 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 import io
 
+# Music functionality imports
+try:
+    import youtube_dl
+    import yt_dlp as youtube_dl  # Use yt-dlp as fallback for youtube-dl
+    YOUTUBE_DL_AVAILABLE = True
+    print("✅ YouTube downloader available - music functionality enabled")
+except ImportError:
+    try:
+        import youtube_dl
+        YOUTUBE_DL_AVAILABLE = True
+        print("✅ youtube-dl available - music functionality enabled")
+    except ImportError:
+        print("⚠️  YouTube downloader not available - music functionality disabled")
+        print("   Install with: pip install yt-dlp")
+        YOUTUBE_DL_AVAILABLE = False
+
 # Optional Flask import for webserver (for 24/7 deployment)
 try:
     from flask import Flask, jsonify
@@ -36,6 +52,12 @@ DEFAULT_ROLE_ID = int(os.getenv('DEFAULT_ROLE_ID', 0)) or None
 AUTO_ROLE_ID = int(os.getenv('AUTO_ROLE_ID', 0)) or None  # Role to give to new members
 BOT_PREFIX = os.getenv('BOT_PREFIX', '!')
 MAX_VOICE_LIMIT = int(os.getenv('MAX_VOICE_CHANNEL_LIMIT', 10))
+
+# Logging channel configuration
+MEMBER_LOG_CHANNEL_ID = int(os.getenv('MEMBER_LOG_CHANNEL_ID', 0)) or None  # Join/Leave logs
+ROLE_LOG_CHANNEL_ID = int(os.getenv('ROLE_LOG_CHANNEL_ID', 0)) or None      # Role change logs
+MESSAGE_LOG_CHANNEL_ID = int(os.getenv('MESSAGE_LOG_CHANNEL_ID', 0)) or None # Message edit/delete logs
+MODERATION_LOG_CHANNEL_ID = int(os.getenv('MODERATION_LOG_CHANNEL_ID', 0)) or None # General moderation logs
 
 # Parse specific VC roles from environment variable (multiple roles allowed)
 SPECIFIC_VC_ROLE_IDS = []
@@ -71,6 +93,95 @@ bot = commands.Bot(command_prefix=BOT_PREFIX, intents=intents, help_command=None
 # Store temporary voice channels for cleanup and role-based grouping
 temp_voice_channels = {}
 role_voice_channels = {}  # Track voice channels by role
+
+# Music functionality variables
+music_queues = {}  # Store music queues per guild
+voice_clients = {}  # Store voice clients per guild
+
+# YouTube DL options for music (optimized for HIGH-QUALITY AD-FREE playback)
+if YOUTUBE_DL_AVAILABLE:
+    ytdl_format_options = {
+        # High-quality audio format selection (best quality, ad-free sources)
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=mp3]/bestaudio',
+        'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+        'restrictfilenames': True,
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': False,
+        'logtostderr': False,
+        'quiet': True,
+        'no_warnings': True,
+        'default_search': 'ytsearch',  # Force YouTube search for consistency
+        'source_address': '0.0.0.0',
+        'prefer_ffmpeg': True,
+        
+        # Advanced audio processing for better quality
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '320',  # Highest quality
+        }],
+        
+        # COMPREHENSIVE AD-BLOCKING AND ANTI-AD MEASURES
+        'cookiefile': None,
+        'no_check_certificate': True,
+        'geo_bypass': True,
+        'geo_bypass_country': 'US',
+        'writesubtitles': False,
+        'writeautomaticsub': False,
+        'extract_flat': False,
+        'writethumbnail': False,
+        'writeinfojson': False,
+        'writedescription': False,
+        'writecomments': False,
+        'writeannotations': False,
+        
+        # Advanced extractor arguments for ad-free experience
+        'extractor_args': {
+            'youtube': {
+                'skip': ['dash', 'hls', 'live_chat'],  # Skip ad-prone formats
+                'player_skip': ['configs', 'webpage'],
+                'player_client': ['android', 'web'],  # Use mobile client to avoid ads
+                'skip_manifests': True,  # Skip manifests that may contain ads
+            }
+        },
+        
+        # Additional anti-ad headers and options
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (compatible; yt-dlp/2023.12.30)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        }
+    }
+
+    ffmpeg_options = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
+        'options': '-vn -filter:a "volume=0.5"'  # Default volume and audio filtering
+    }
+
+    ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+
+    class YTDLSource(discord.PCMVolumeTransformer):
+        def __init__(self, source, *, data, volume=0.5):
+            super().__init__(source, volume)
+            self.data = data
+            self.title = data.get('title')
+            self.url = data.get('url')
+            self.duration = data.get('duration')
+            self.requester = data.get('requester')
+
+        @classmethod
+        async def from_url(cls, url, *, loop=None, stream=False, requester=None):
+            loop = loop or asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+
+            if 'entries' in data:
+                data = data['entries'][0]
+
+            data['requester'] = requester
+            filename = data['url'] if stream else ytdl.prepare_filename(data)
+            return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 # Welcome messages templates
 WELCOME_MESSAGES = [
@@ -175,6 +286,216 @@ async def create_welcome_image(member):
     except Exception as e:
         print(f"Error creating welcome image: {e}")
         return None
+
+# =============================================================================
+# MUSIC FUNCTIONALITY
+# =============================================================================
+# 
+# This section provides full music bot functionality including:
+# - YouTube music streaming with yt-dlp
+# - Queue management with skip, stop, shuffle
+# - Volume control and playback management
+# - Automatic voice channel joining
+# - Both slash commands (/dotgen_) and legacy prefix commands
+#
+# Requirements:
+# - yt-dlp: pip install yt-dlp
+# - PyNaCl: pip install PyNaCl (for voice support)
+# - FFmpeg: Download from https://ffmpeg.org/download.html
+#
+# Music Commands Available:
+# Slash: /dotgen_play, /dotgen_skip, /dotgen_stop, /dotgen_queue, /dotgen_volume, /dotgen_disconnect
+# Prefix: !play, !skip, !stop, !queue, !volume, !disconnect
+# =============================================================================
+
+if YOUTUBE_DL_AVAILABLE:
+    class MusicQueue:
+        """Advanced music queue for a guild with enhanced features"""
+        def __init__(self):
+            self.queue = []
+            self.current = None
+            self.loop = False
+            self.loop_queue = False  # Loop entire queue
+            self.volume = 0.5
+            self.shuffle_enabled = False
+            self.history = []  # Track played songs
+            self.max_history = 50
+            self.auto_play = False  # Auto-play related songs
+
+        def add_song(self, song):
+            """Add a song to the queue"""
+            self.queue.append(song)
+            if self.shuffle_enabled:
+                self.shuffle()
+
+        def get_next(self):
+            """Get the next song to play"""
+            if self.loop and self.current:
+                return self.current
+            
+            if self.queue:
+                if self.current:
+                    self.add_to_history(self.current)
+                
+                if self.shuffle_enabled:
+                    # Get random song from queue
+                    import random
+                    index = random.randint(0, len(self.queue) - 1)
+                    self.current = self.queue.pop(index)
+                else:
+                    self.current = self.queue.pop(0)
+                    
+                return self.current
+            elif self.loop_queue and self.history:
+                # Loop the entire queue by restoring from history
+                self.queue = self.history.copy()
+                self.history.clear()
+                if self.queue:
+                    self.current = self.queue.pop(0)
+                    return self.current
+            
+            self.current = None
+            return None
+
+        def skip(self):
+            """Skip current song and get next"""
+            if self.current:
+                self.add_to_history(self.current)
+            
+            if self.queue:
+                if self.shuffle_enabled:
+                    import random
+                    index = random.randint(0, len(self.queue) - 1)
+                    self.current = self.queue.pop(index)
+                else:
+                    self.current = self.queue.pop(0)
+                return self.current
+            
+            self.current = None
+            return None
+
+        def previous(self):
+            """Play previous song from history"""
+            if self.history:
+                if self.current:
+                    self.queue.insert(0, self.current)  # Put current back in queue
+                self.current = self.history.pop()
+                return self.current
+            return None
+
+        def clear(self):
+            """Clear the queue and current song"""
+            self.queue.clear()
+            self.current = None
+
+        def shuffle(self):
+            """Shuffle the current queue"""
+            import random
+            random.shuffle(self.queue)
+            self.shuffle_enabled = True
+
+        def remove_song(self, index):
+            """Remove a song from queue by index"""
+            if 0 <= index < len(self.queue):
+                return self.queue.pop(index)
+            return None
+
+        def move_song(self, from_index, to_index):
+            """Move a song in the queue"""
+            if 0 <= from_index < len(self.queue) and 0 <= to_index < len(self.queue):
+                song = self.queue.pop(from_index)
+                self.queue.insert(to_index, song)
+                return True
+            return False
+
+        def add_to_history(self, song):
+            """Add song to history"""
+            self.history.append(song)
+            if len(self.history) > self.max_history:
+                self.history.pop(0)
+
+        def get_queue_info(self):
+            """Get formatted queue information"""
+            total_duration = 0
+            for song in self.queue:
+                if song.duration:
+                    total_duration += song.duration
+            
+            return {
+                'queue_length': len(self.queue),
+                'total_duration': total_duration,
+                'current_song': self.current.title if self.current else None,
+                'loop': self.loop,
+                'loop_queue': self.loop_queue,
+                'shuffle': self.shuffle_enabled,
+                'volume': int(self.volume * 100)
+            }
+
+    async def join_voice_channel(ctx):
+        """Join the voice channel the user is in"""
+        if not ctx.author.voice:
+            await ctx.send("❌ You need to be in a voice channel to use music commands!")
+            return None
+
+        channel = ctx.author.voice.channel
+        
+        # Check if bot is already connected to voice
+        if ctx.guild.voice_client:
+            if ctx.guild.voice_client.channel == channel:
+                return ctx.guild.voice_client
+            else:
+                await ctx.guild.voice_client.move_to(channel)
+                return ctx.guild.voice_client
+        
+        # Connect to voice channel
+        try:
+            voice_client = await channel.connect()
+            voice_clients[ctx.guild.id] = voice_client
+            return voice_client
+        except Exception as e:
+            await ctx.send(f"❌ Failed to connect to voice channel: {e}")
+            return None
+
+    async def play_next_song(guild_id, voice_client):
+        """Play the next song in the queue"""
+        if guild_id not in music_queues:
+            return
+
+        queue = music_queues[guild_id]
+        next_song = queue.get_next()
+
+        if next_song:
+            try:
+                voice_client.play(next_song, after=lambda e: asyncio.run_coroutine_threadsafe(
+                    play_next_song(guild_id, voice_client), bot.loop
+                ))
+                voice_client.source.volume = queue.volume
+            except Exception as e:
+                print(f"Error playing song: {e}")
+        else:
+            # Queue is empty, disconnect after 5 minutes of inactivity
+            await asyncio.sleep(300)
+            if not voice_client.is_playing():
+                await voice_client.disconnect()
+                if guild_id in voice_clients:
+                    del voice_clients[guild_id]
+
+    async def search_youtube(query):
+        """Search YouTube for a song"""
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch:{query}", download=False))
+            
+            if 'entries' in data and data['entries']:
+                return data['entries'][0]
+            return None
+        except Exception as e:
+            print(f"Error searching YouTube: {e}")
+            return None
+
+# =============================================================================
+# END MUSIC FUNCTIONALITY
+# =============================================================================
 
 @bot.event
 async def on_ready():
@@ -370,6 +691,9 @@ async def on_member_join(member):
                 await welcome_channel.send(file=welcome_image, embed=embed)
             else:
                 await welcome_channel.send(embed=embed)
+        
+        # Call extended member join logging
+        await on_member_join_extended(member)
             
     except Exception as e:
         print(f"Error sending welcome message: {e}")
@@ -388,6 +712,9 @@ async def on_voice_state_update(member, before, after):
         # Check if member left a temporary voice channel
         if before.channel and before.channel.id in temp_voice_channels:
             await handle_voice_channel_cleanup(before.channel)
+        
+        # Call extended voice logging
+        await on_voice_state_update_extended(member, before, after)
             
     except Exception as e:
         print(f"Error in voice state update: {e}")
@@ -651,6 +978,374 @@ async def handle_voice_channel_cleanup(channel):
         if channel.id in temp_voice_channels:
             del temp_voice_channels[channel.id]
 
+# =============================================================================
+# COMPREHENSIVE LOGGING SYSTEM
+# =============================================================================
+
+@bot.event
+async def on_member_update(before, after):
+    """Log role changes and other member updates"""
+    if not ROLE_LOG_CHANNEL_ID:
+        return
+        
+    try:
+        # Check for role changes
+        roles_added = [role for role in after.roles if role not in before.roles]
+        roles_removed = [role for role in before.roles if role not in after.roles]
+        
+        if roles_added or roles_removed:
+            log_channel = bot.get_channel(ROLE_LOG_CHANNEL_ID)
+            if log_channel:
+                embed = discord.Embed(
+                    title="🎭 Role Changes",
+                    color=discord.Color.orange()
+                )
+                
+                embed.add_field(
+                    name="👤 Member",
+                    value=f"{after.mention} ({after.display_name})",
+                    inline=False
+                )
+                
+                if roles_added:
+                    embed.add_field(
+                        name="➕ Roles Added",
+                        value=", ".join([f"@{role.name}" for role in roles_added]),
+                        inline=False
+                    )
+                
+                if roles_removed:
+                    embed.add_field(
+                        name="➖ Roles Removed", 
+                        value=", ".join([f"@{role.name}" for role in roles_removed]),
+                        inline=False
+                    )
+                
+                embed.set_thumbnail(url=after.avatar.url if after.avatar else after.default_avatar.url)
+                embed.timestamp = discord.utils.utcnow()
+                embed.set_footer(text=f"User ID: {after.id}")
+                
+                await log_channel.send(embed=embed)
+                
+        # Check for nickname changes
+        if before.display_name != after.display_name:
+            log_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID) if MODERATION_LOG_CHANNEL_ID else bot.get_channel(ROLE_LOG_CHANNEL_ID)
+            if log_channel:
+                embed = discord.Embed(
+                    title="📝 Nickname Changed",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="👤 Member", value=after.mention, inline=True)
+                embed.add_field(name="📛 Old Nickname", value=before.display_name or "None", inline=True)
+                embed.add_field(name="🆕 New Nickname", value=after.display_name or "None", inline=True)
+                embed.timestamp = discord.utils.utcnow()
+                embed.set_footer(text=f"User ID: {after.id}")
+                
+                await log_channel.send(embed=embed)
+                
+    except Exception as e:
+        print(f"Error logging member update: {e}")
+
+@bot.event
+async def on_member_remove(member):
+    """Log member leaving the server"""
+    if not MEMBER_LOG_CHANNEL_ID:
+        return
+        
+    try:
+        log_channel = bot.get_channel(MEMBER_LOG_CHANNEL_ID)
+        if log_channel:
+            embed = discord.Embed(
+                title="👋 Member Left",
+                description=f"{member.mention} has left the server",
+                color=discord.Color.red()
+            )
+            
+            embed.add_field(
+                name="👤 User Info",
+                value=f"**Name:** {member.display_name}\n**Tag:** {member}\n**ID:** {member.id}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📅 Joined Server",
+                value=discord.utils.format_dt(member.joined_at, style='R') if member.joined_at else "Unknown",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📊 Account Age",
+                value=discord.utils.format_dt(member.created_at, style='R'),
+                inline=True
+            )
+            
+            # Show roles they had
+            user_roles = [role.name for role in member.roles if role.name != "@everyone"]
+            if user_roles:
+                embed.add_field(
+                    name="🎭 Roles",
+                    value=", ".join(user_roles[:10]) + ("..." if len(user_roles) > 10 else ""),
+                    inline=False
+                )
+            
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Total members: {len(member.guild.members)}")
+            
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Error logging member leave: {e}")
+
+@bot.event
+async def on_message_edit(before, after):
+    """Log message edits"""
+    if not MESSAGE_LOG_CHANNEL_ID or before.author.bot:
+        return
+        
+    # Skip if content is the same (embed updates, etc.)
+    if before.content == after.content:
+        return
+        
+    try:
+        log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL_ID)
+        if log_channel:
+            embed = discord.Embed(
+                title="✏️ Message Edited",
+                color=discord.Color.orange()
+            )
+            
+            embed.add_field(
+                name="👤 Author",
+                value=f"{after.author.mention} ({after.author.display_name})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📍 Channel",
+                value=f"{after.channel.mention}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🔗 Jump to Message",
+                value=f"[Click here]({after.jump_url})",
+                inline=True
+            )
+            
+            # Truncate content if too long
+            old_content = before.content[:500] + "..." if len(before.content) > 500 else before.content
+            new_content = after.content[:500] + "..." if len(after.content) > 500 else after.content
+            
+            embed.add_field(
+                name="📝 Before",
+                value=old_content or "*No content*",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🆕 After",
+                value=new_content or "*No content*",
+                inline=False
+            )
+            
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Message ID: {after.id} | User ID: {after.author.id}")
+            
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Error logging message edit: {e}")
+
+@bot.event
+async def on_message_delete(message):
+    """Log message deletions"""
+    if not MESSAGE_LOG_CHANNEL_ID or message.author.bot:
+        return
+        
+    try:
+        log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL_ID)
+        if log_channel:
+            embed = discord.Embed(
+                title="🗑️ Message Deleted",
+                color=discord.Color.red()
+            )
+            
+            embed.add_field(
+                name="👤 Author",
+                value=f"{message.author.mention} ({message.author.display_name})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📍 Channel",
+                value=f"{message.channel.mention}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📅 Sent",
+                value=discord.utils.format_dt(message.created_at, style='R'),
+                inline=True
+            )
+            
+            # Truncate content if too long
+            content = message.content[:1000] + "..." if len(message.content) > 1000 else message.content
+            
+            embed.add_field(
+                name="📝 Content",
+                value=content or "*No text content*",
+                inline=False
+            )
+            
+            # Show attachments if any
+            if message.attachments:
+                attachment_info = []
+                for att in message.attachments[:3]:  # Limit to 3 attachments
+                    attachment_info.append(f"📎 {att.filename} ({att.size} bytes)")
+                
+                embed.add_field(
+                    name="📎 Attachments",
+                    value="\n".join(attachment_info),
+                    inline=False
+                )
+            
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Message ID: {message.id} | User ID: {message.author.id}")
+            
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Error logging message deletion: {e}")
+
+@bot.event
+async def on_voice_state_update_extended(member, before, after):
+    """Extended voice state logging (separate from channel creation logic)"""
+    if not VOICE_LOG_CHANNEL_ID:
+        return
+        
+    try:
+        log_channel = bot.get_channel(VOICE_LOG_CHANNEL_ID)
+        if not log_channel:
+            return
+            
+        # Member joined a voice channel
+        if not before.channel and after.channel:
+            embed = discord.Embed(
+                title="🎤 Voice Channel Joined",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="👤 Member", value=f"{member.mention} ({member.display_name})", inline=True)
+            embed.add_field(name="📍 Channel", value=after.channel.name, inline=True)
+            embed.add_field(name="👥 Members in Channel", value=len(after.channel.members), inline=True)
+            
+        # Member left a voice channel
+        elif before.channel and not after.channel:
+            embed = discord.Embed(
+                title="🚪 Voice Channel Left",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="👤 Member", value=f"{member.mention} ({member.display_name})", inline=True)
+            embed.add_field(name="📍 Channel", value=before.channel.name, inline=True)
+            embed.add_field(name="👥 Members Remaining", value=len(before.channel.members), inline=True)
+            
+        # Member moved between voice channels
+        elif before.channel and after.channel and before.channel != after.channel:
+            embed = discord.Embed(
+                title="🔄 Voice Channel Moved",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="👤 Member", value=f"{member.mention} ({member.display_name})", inline=False)
+            embed.add_field(name="📤 From", value=before.channel.name, inline=True)
+            embed.add_field(name="📥 To", value=after.channel.name, inline=True)
+            
+        # Mute/unmute, deafen/undeafen changes
+        elif before.channel == after.channel and after.channel:
+            changes = []
+            if before.self_mute != after.self_mute:
+                changes.append(f"Self-muted: {after.self_mute}")
+            if before.self_deaf != after.self_deaf:
+                changes.append(f"Self-deafened: {after.self_deaf}")
+            if before.mute != after.mute:
+                changes.append(f"Server-muted: {after.mute}")
+            if before.deaf != after.deaf:
+                changes.append(f"Server-deafened: {after.deaf}")
+                
+            if changes:
+                embed = discord.Embed(
+                    title="🔊 Voice State Changed",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(name="👤 Member", value=f"{member.mention} ({member.display_name})", inline=True)
+                embed.add_field(name="📍 Channel", value=after.channel.name, inline=True)
+                embed.add_field(name="🔄 Changes", value="\n".join(changes), inline=False)
+        else:
+            return  # No significant change to log
+            
+        embed.timestamp = discord.utils.utcnow()
+        embed.set_footer(text=f"User ID: {member.id}")
+        
+        await log_channel.send(embed=embed, delete_after=300)  # Auto-delete after 5 minutes
+        
+    except Exception as e:
+        print(f"Error logging extended voice state: {e}")
+
+# Enhance the existing member join event to also log to member log channel
+@bot.event  
+async def on_member_join_extended(member):
+    """Enhanced member join logging (in addition to welcome messages)"""
+    if not MEMBER_LOG_CHANNEL_ID:
+        return
+        
+    try:
+        log_channel = bot.get_channel(MEMBER_LOG_CHANNEL_ID)
+        if log_channel:
+            embed = discord.Embed(
+                title="🎉 New Member Joined",
+                description=f"{member.mention} has joined the server!",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(
+                name="👤 User Info",
+                value=f"**Name:** {member.display_name}\n**Tag:** {member}\n**ID:** {member.id}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📅 Account Created",
+                value=discord.utils.format_dt(member.created_at, style='R'),
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📊 Member Count",
+                value=f"#{len(member.guild.members)}",
+                inline=True
+            )
+            
+            # Check account age for security
+            account_age = discord.utils.utcnow() - member.created_at
+            if account_age.days < 7:
+                embed.add_field(
+                    name="⚠️ Security Alert",
+                    value=f"Account is only {account_age.days} days old",
+                    inline=False
+                )
+            
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Total members: {len(member.guild.members)}")
+            
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Error logging member join: {e}")
+
+# =============================================================================
+# END LOGGING SYSTEM
+# =============================================================================
+
 # Commands for managing the bot
 @bot.command(name="setup_lobby")
 @commands.has_permissions(administrator=True)
@@ -738,6 +1433,75 @@ async def get_ids(ctx, channel: discord.TextChannel = None):
         
     except Exception as e:
         await ctx.send(f"❌ Error getting IDs: {e}")
+
+@bot.command(name="setup_logging", aliases=["logging_setup"])
+@commands.has_permissions(administrator=True)
+async def setup_logging(ctx):
+    """Setup logging channels for comprehensive server monitoring"""
+    try:
+        guild = ctx.guild
+        
+        embed = discord.Embed(
+            title="📋 Logging Channels Setup",
+            description="Configure logging channels for comprehensive server monitoring:",
+            color=discord.Color.blue()
+        )
+        
+        # Check current logging channel configurations
+        logging_configs = [
+            ("MEMBER_LOG_CHANNEL_ID", MEMBER_LOG_CHANNEL_ID, "👥 Member Join/Leave", "member-logs"),
+            ("ROLE_LOG_CHANNEL_ID", ROLE_LOG_CHANNEL_ID, "🎭 Role Changes", "role-logs"), 
+            ("MESSAGE_LOG_CHANNEL_ID", MESSAGE_LOG_CHANNEL_ID, "💬 Message Edit/Delete", "message-logs"),
+            ("VOICE_LOG_CHANNEL_ID", VOICE_LOG_CHANNEL_ID, "🎤 Voice Activity", "voice-logs"),
+            ("MODERATION_LOG_CHANNEL_ID", MODERATION_LOG_CHANNEL_ID, "🛡️ Moderation Actions", "mod-logs")
+        ]
+        
+        configured_channels = []
+        missing_channels = []
+        
+        for env_var, channel_id, description, suggested_name in logging_configs:
+            if channel_id:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    configured_channels.append(f"✅ {description}: {channel.mention}")
+                else:
+                    missing_channels.append(f"❌ {description}: Invalid ID ({channel_id})")
+            else:
+                missing_channels.append(f"⚪ {description}: Not configured")
+                
+        if configured_channels:
+            embed.add_field(
+                name="✅ Configured Logging Channels",
+                value="\n".join(configured_channels),
+                inline=False
+            )
+            
+        if missing_channels:
+            embed.add_field(
+                name="⚠️ Missing/Invalid Logging Channels", 
+                value="\n".join(missing_channels),
+                inline=False
+            )
+            
+        # Instructions for setup
+        embed.add_field(
+            name="🔧 Setup Instructions",
+            value="1. Create text channels for each log type\n2. Use `/get_ids` to get their channel IDs\n3. Add the IDs to your `.env` file\n4. Restart the bot\n\n**Suggested channel names:**\n`#member-logs` `#role-logs` `#message-logs`\n`#voice-logs` `#mod-logs`",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📝 What Gets Logged",
+            value="**Member Logs:** Join/leave events, account age warnings\n**Role Logs:** Role additions/removals, nickname changes\n**Message Logs:** Message edits and deletions\n**Voice Logs:** VC join/leave/move, mute/deafen changes\n**Mod Logs:** General moderation actions",
+            inline=False
+        )
+        
+        embed.set_footer(text="💡 Each log type can use the same channel or separate channels for organization")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error setting up logging: {e}")
 
 @bot.command(name="config", aliases=["config_status", "status"])
 @commands.has_permissions(administrator=True)
@@ -847,6 +1611,29 @@ async def config_status(ctx):
             inline=True
         )
         
+        # Check logging channels
+        logging_status = []
+        logging_channels = [
+            ("Member Logs", MEMBER_LOG_CHANNEL_ID),
+            ("Role Logs", ROLE_LOG_CHANNEL_ID), 
+            ("Message Logs", MESSAGE_LOG_CHANNEL_ID),
+            ("Mod Logs", MODERATION_LOG_CHANNEL_ID)
+        ]
+        
+        for name, channel_id in logging_channels:
+            if channel_id:
+                channel = bot.get_channel(channel_id)
+                status = f"✅ {name}" if channel else f"❌ {name}"
+            else:
+                status = f"⚪ {name}"
+            logging_status.append(status)
+        
+        embed.add_field(
+            name="📋 Logging Channels",
+            value="\n".join(logging_status) + f"\n\nUse `{BOT_PREFIX}setup_logging` for details",
+            inline=False
+        )
+        
         embed.set_footer(text=f"Use {BOT_PREFIX}get_ids to get channel/server IDs for your .env file")
         
         await ctx.send(embed=embed)
@@ -888,6 +1675,19 @@ async def bot_info(ctx):
         inline=False
     )
     
+    if YOUTUBE_DL_AVAILABLE:
+        embed.add_field(
+            name="🎵 Music Player",
+            value="Play music from YouTube with queue support, volume control, and more!\nUse `/dotgen_play` to get started.",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="🎵 Music Player (Disabled)",
+            value="Music functionality available with yt-dlp installation.\nRun: `pip install yt-dlp`",
+            inline=False
+        )
+    
     # Dynamically generate command categories
     general_cmds = []
     admin_cmds = []
@@ -916,13 +1716,13 @@ async def bot_info(ctx):
     
     embed.add_field(
         name="📖 General Commands",
-        value="\n".join(sorted(general_cmds)) if general_cmds else "None available",
+        value="`/dotgen_help` - Complete help system\n`/dotgen_info` - Bot information\n`/dotgen_ping` - Check bot status",
         inline=False
     )
     
     embed.add_field(
-        name="🛠️ Admin Commands",
-        value="\n".join(sorted(admin_cmds)) if admin_cmds else "None available",
+        name="🛠️ Admin Commands", 
+        value="`/dotgen_config` - View configuration\n`/dotgen_announce` - Send announcements\n`/dotgen_welcome` - Send welcome messages",
         inline=False
     )
     
@@ -1014,22 +1814,22 @@ async def help_command(ctx, *, command_name: str = None):
     
     embed.add_field(
         name="⚡ Essential Slash Commands",
-        value="`/dotgen_help` - Complete help & command list\n`/dotgen_info` - Bot information\n`/dotgen_ping` - Check bot status\n`/dotgen_config` - View configuration\n`/dotgen_welcome` - Send welcome message",
+        value="`/dotgen_help` - Complete help\n`/dotgen_info` - Bot info\n`/dotgen_ping` - Status check\n`/dotgen_config` - Configuration\n`/dotgen_welcome` - Welcome messages" + (f"\n`/dotgen_play` - Play music\n`/dotgen_queue` - Music queue" if YOUTUBE_DL_AVAILABLE else ""),
         inline=False
     )
     
     embed.add_field(
         name="🎯 Quick Start",
-        value="1. Type `/` in chat\n2. Look for `dotgen_` commands\n3. Use `/dotgen_help` for complete list\n4. Tab completion shows all options!",
+        value="1. Type `/` in chat\n2. Look for `dotgen_` commands\n3. Use `/dotgen_help` for complete list\n4. Tab completion shows options!",
         inline=False
     )
     
-    # Show limited prefix commands that still exist
+    # Show limited prefix commands that still exist (shortened)
     prefix_cmds = [cmd.name for cmd in bot.commands if cmd.name not in ['help', 'bot_info']]
     if prefix_cmds:
         embed.add_field(
-            name="⚠️ Legacy Prefix Commands",
-            value=f"Some admin commands still use `{BOT_PREFIX}` prefix, but **slash commands are recommended**.\nUse `/dotgen_help` for the complete list.",
+            name="⚠️ Legacy Commands",
+            value=f"Admin commands use `{BOT_PREFIX}` prefix. **Use slash commands instead!**\nSee `/dotgen_help` for full list.",
             inline=False
         )
     
@@ -1375,6 +2175,201 @@ async def echo(ctx, *, message):
     except Exception as e:
         await ctx.send(f"❌ Error sending message: {e}")
 
+# =============================================================================
+# MUSIC PREFIX COMMANDS (Legacy support)
+# =============================================================================
+
+if YOUTUBE_DL_AVAILABLE:
+    @bot.command(name="play", aliases=["p"])
+    async def play_music(ctx, *, query):
+        """Play music from YouTube (Legacy command - use /dotgen_play instead)"""
+        # Check if user is in a voice channel
+        if not ctx.author.voice:
+            await ctx.send("❌ You need to be in a voice channel to play music!")
+            return
+
+        # Join voice channel
+        voice_client = await join_voice_channel(ctx)
+        if not voice_client:
+            return
+
+        # Initialize music queue for guild if needed
+        if ctx.guild.id not in music_queues:
+            music_queues[ctx.guild.id] = MusicQueue()
+
+        queue = music_queues[ctx.guild.id]
+
+        try:
+            # Search for the song
+            search_msg = await ctx.send(f"🔍 Searching for: **{query}**...")
+            
+            # Create the audio source
+            player = await YTDLSource.from_url(query, loop=bot.loop, stream=True, requester=ctx.author)
+            
+            # Add to queue
+            queue.add_song(player)
+            
+            # If nothing is currently playing, start playing
+            if not voice_client.is_playing():
+                await play_next_song(ctx.guild.id, voice_client)
+                embed = discord.Embed(
+                    title="🎵 Now Playing",
+                    description=f"**{player.title}**",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Requested by", value=ctx.author.mention, inline=True)
+                if player.duration:
+                    mins, secs = divmod(player.duration, 60)
+                    embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                await search_msg.edit(content=None, embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="📝 Added to Queue",
+                    description=f"**{player.title}**",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="Requested by", value=ctx.author.mention, inline=True)
+                embed.add_field(name="Position in queue", value=str(len(queue.queue)), inline=True)
+                if player.duration:
+                    mins, secs = divmod(player.duration, 60)
+                    embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                await search_msg.edit(content=None, embed=embed)
+                
+        except Exception as e:
+            await ctx.send(f"❌ Error playing music: {e}")
+
+    @bot.command(name="skip", aliases=["s"])
+    async def skip_music(ctx):
+        """Skip the current song"""
+        if not ctx.author.voice:
+            await ctx.send("❌ You need to be in a voice channel to use music commands!")
+            return
+
+        voice_client = ctx.guild.voice_client
+        if not voice_client:
+            await ctx.send("❌ I'm not playing any music!")
+            return
+
+        if voice_client.is_playing():
+            voice_client.stop()
+            await ctx.send("⏭️ Song skipped!")
+        else:
+            await ctx.send("❌ No music is currently playing!")
+
+    @bot.command(name="stop")
+    async def stop_music(ctx):
+        """Stop music and clear queue"""
+        if not ctx.author.voice:
+            await ctx.send("❌ You need to be in a voice channel to use music commands!")
+            return
+
+        voice_client = ctx.guild.voice_client
+        if not voice_client:
+            await ctx.send("❌ I'm not connected to any voice channel!")
+            return
+
+        # Clear queue and stop music
+        if ctx.guild.id in music_queues:
+            music_queues[ctx.guild.id].clear()
+
+        if voice_client.is_playing():
+            voice_client.stop()
+
+        await ctx.send("⏹️ Music stopped and queue cleared!")
+
+    @bot.command(name="queue", aliases=["q"])
+    async def show_queue(ctx):
+        """Show the music queue"""
+        if ctx.guild.id not in music_queues:
+            await ctx.send("❌ No music queue found!")
+            return
+
+        queue = music_queues[ctx.guild.id]
+        
+        embed = discord.Embed(
+            title="🎵 Music Queue",
+            color=discord.Color.blue()
+        )
+
+        if queue.current:
+            embed.add_field(
+                name="🎵 Now Playing",
+                value=f"**{queue.current.title}**\nRequested by: {queue.current.requester.mention if queue.current.requester else 'Unknown'}",
+                inline=False
+            )
+
+        if queue.queue:
+            queue_text = ""
+            for i, song in enumerate(queue.queue[:10], 1):  # Show first 10 songs
+                queue_text += f"{i}. **{song.title}** - {song.requester.mention if song.requester else 'Unknown'}\n"
+            
+            if len(queue.queue) > 10:
+                queue_text += f"\n... and {len(queue.queue) - 10} more songs"
+            
+            embed.add_field(
+                name=f"📝 Up Next ({len(queue.queue)} songs)",
+                value=queue_text,
+                inline=False
+            )
+        else:
+            if not queue.current:
+                embed.add_field(
+                    name="📝 Queue Status",
+                    value=f"Queue is empty. Use `{BOT_PREFIX}play <song>` to add songs!",
+                    inline=False
+                )
+
+        await ctx.send(embed=embed)
+
+    @bot.command(name="volume", aliases=["vol"])
+    async def set_volume(ctx, volume: int):
+        """Change music volume (0-100)"""
+        if not ctx.author.voice:
+            await ctx.send("❌ You need to be in a voice channel to use music commands!")
+            return
+
+        if volume < 0 or volume > 100:
+            await ctx.send("❌ Volume must be between 0 and 100!")
+            return
+
+        voice_client = ctx.guild.voice_client
+        if not voice_client:
+            await ctx.send("❌ I'm not connected to any voice channel!")
+            return
+
+        # Update volume
+        volume_decimal = volume / 100
+        if ctx.guild.id in music_queues:
+            music_queues[ctx.guild.id].volume = volume_decimal
+
+        if voice_client.source:
+            voice_client.source.volume = volume_decimal
+
+        await ctx.send(f"🔊 Volume set to **{volume}%**")
+
+    @bot.command(name="disconnect", aliases=["dc", "leave"])
+    async def disconnect_music(ctx):
+        """Disconnect from voice channel"""
+        voice_client = ctx.guild.voice_client
+        if not voice_client:
+            await ctx.send("❌ I'm not connected to any voice channel!")
+            return
+
+        # Clear queue and disconnect
+        if ctx.guild.id in music_queues:
+            music_queues[ctx.guild.id].clear()
+            del music_queues[ctx.guild.id]
+
+        if ctx.guild.id in voice_clients:
+            del voice_clients[ctx.guild.id]
+
+        await voice_client.disconnect()
+        await ctx.send("👋 Disconnected from voice channel!")
+
+# =============================================================================
+# END MUSIC PREFIX COMMANDS
+# =============================================================================
+
 # Rotating status activities
 ACTIVITIES = [
     {"name": "DOTGEN.AI server 🛠️", "type": discord.ActivityType.watching},
@@ -1383,6 +2378,8 @@ ACTIVITIES = [
     {"name": f"{BOT_PREFIX} commands 💬", "type": discord.ActivityType.listening},
     {"name": "voice channels 🎤", "type": discord.ActivityType.listening},
     {"name": "DOTGEN.AI announcements 📢", "type": discord.ActivityType.watching},
+    {"name": "music 🎵", "type": discord.ActivityType.listening},
+    {"name": "/dotgen_ commands 🎯", "type": discord.ActivityType.listening},
 ]
 
 # Global variable to track current activity index
@@ -1626,66 +2623,6 @@ def start_webserver():
     webserver_thread.start()
     print(f"🌐 DOTGEN.AI Webserver started on port {os.getenv('PORT', 8080)}")
 
-# Bot configuration
-if __name__ == "__main__":
-    if not TOKEN:
-        print("❌ DISCORD_TOKEN not found in environment variables!")
-        print("Please create a .env file with your bot token:")
-        print("DISCORD_TOKEN=your_bot_token_here")
-        sys.exit(1)
-    else:
-        print("🤖 Starting DOTGEN.AI Discord Bot...")
-        print("📋 Configuration loaded:")
-        print(f"   - Welcome Channel ID: {WELCOME_CHANNEL_ID or 'Not set'}")
-        print(f"   - Lobby Voice Channel ID: {LOBBY_VOICE_CHANNEL_ID or 'Not set'}")
-        print(f"   - Voice Log Channel ID: {VOICE_LOG_CHANNEL_ID or 'Not set'}")
-        print(f"   - Voice Category ID: {VOICE_CATEGORY_ID or 'Not set'}")
-        print(f"   - Guild ID: {GUILD_ID or 'Not set'}")
-        print(f"   - Default Role ID: {DEFAULT_ROLE_ID or 'Not set'}")
-        print(f"   - Allowed Roles: {len(ALLOWED_ROLES)} role(s) configured" if ALLOWED_ROLES else "   - Allowed Roles: All users allowed")
-        print(f"   - Bot Prefix: {BOT_PREFIX}")
-        print(f"   - Max Voice Limit: {MAX_VOICE_LIMIT}")
-        print()        
-        if not privileged_intents_available:
-            print("⚠️  RUNNING IN LIMITED MODE:")
-            print("   - No automatic member join detection")
-            print(f"   - Use {BOT_PREFIX}welcome @member for welcome messages")
-            print("   - Voice channels work normally")
-            print()
-        
-        try:
-            # Start the webserver for 24/7 keepalive (if Flask is available)
-            webserver_started = start_webserver()
-            if webserver_started:
-                print("🌐 Webserver started for 24/7 operation")
-            else:
-                print("⚠️  Running without webserver - bot may sleep on some cloud platforms")
-            
-            # Start the bot
-            bot.run(TOKEN)
-        except discord.errors.PrivilegedIntentsRequired:
-            print("\n❌ PRIVILEGED INTENTS ERROR!")
-            print("🔧 To fix this, go to:")
-            print("   1. https://discord.com/developers/applications/")
-            print("   2. Select your bot application")
-            print("   3. Go to the 'Bot' section")
-            print("   4. Enable these Privileged Gateway Intents:")
-            print("      ✅ SERVER MEMBERS INTENT")
-            print("      ✅ MESSAGE CONTENT INTENT")
-            print("   5. Save changes and restart the bot")
-            print()
-            print("🆘 Alternative: The bot will automatically run in limited mode")
-            print("   if privileged intents are not available.")
-            sys.exit(1)
-        except discord.errors.LoginFailure:
-            print("\n❌ LOGIN FAILED!")
-            print("🔧 Check that your bot token is correct in the .env file")
-            sys.exit(1)
-        except Exception as e:
-            print(f"\n❌ UNEXPECTED ERROR: {e}")
-            print("🔧 Please check your internet connection and try again")
-            sys.exit(1)
-
 # =============================================================================
 # SLASH COMMANDS - Modern Discord commands that don't conflict with Discord
 # =============================================================================
@@ -1731,7 +2668,7 @@ async def slash_info(interaction: discord.Interaction):
     
     embed.add_field(
         name="🎉 Key Features",
-        value="• Auto Welcome Messages\n• Dynamic Voice Channels\n• Admin Management Tools\n• 24/7 Uptime Monitoring\n• Role-Based Access Control",
+        value="• Auto Welcome Messages\n• Dynamic Voice Channels\n• Admin Management Tools\n• 24/7 Uptime Monitoring\n• Role-Based Access Control" + (f"\n• Music Player with Queue Support" if YOUTUBE_DL_AVAILABLE else "\n• Music Player (Install yt-dlp)"),
         inline=False
     )
     
@@ -1896,6 +2833,37 @@ async def slash_config(interaction: discord.Interaction):
             inline=True
         )
         
+        # Check logging configuration
+        logging_config = []
+        log_channels = {
+            "Member Logs": MEMBER_LOG_CHANNEL_ID,
+            "Role Logs": ROLE_LOG_CHANNEL_ID,
+            "Message Logs": MESSAGE_LOG_CHANNEL_ID,
+            "Voice Logs": VOICE_LOG_CHANNEL_ID,
+            "Moderation Logs": MODERATION_LOG_CHANNEL_ID
+        }
+        
+        for log_type, channel_id in log_channels.items():
+            if channel_id:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    logging_config.append(f"✅ {log_type}")
+                else:
+                    logging_config.append(f"❌ {log_type} (Invalid ID)")
+            else:
+                logging_config.append(f"❌ {log_type}")
+        
+        # Split logging config into chunks to avoid field length limit
+        chunk_size = 3
+        for i in range(0, len(logging_config), chunk_size):
+            chunk = logging_config[i:i + chunk_size]
+            field_name = f"📝 Logging Config ({i//chunk_size + 1})" if len(logging_config) > chunk_size else "📝 Logging Configuration"
+            embed.add_field(
+                name=field_name,
+                value="\n".join(chunk),
+                inline=True
+            )
+        
         # Other settings
         embed.add_field(
             name="🔧 Other Settings",
@@ -1961,38 +2929,50 @@ async def slash_help(interaction: discord.Interaction, command: str = None):
         cmd_info = f"`/{cmd.name}`"
         if hasattr(cmd, 'description') and cmd.description:
             desc = cmd.description
-            if len(desc) > 60:
-                desc = desc[:57] + "..."
+            if len(desc) > 40:  # Shortened description length
+                desc = desc[:37] + "..."
             cmd_info += f" - {desc}"
         slash_cmds.append(cmd_info)
     
     if slash_cmds:
-        # Split into chunks if too many commands
-        chunks = [slash_cmds[i:i+8] for i in range(0, len(slash_cmds), 8)]
-        for i, chunk in enumerate(chunks[:3]):  # Show up to 3 chunks
-            title = "⚡ Primary Slash Commands" if i == 0 else f"⚡ More Slash Commands ({i+1})"
-            embed.add_field(name=title, value="\n".join(chunk), inline=False)
+        # Split into smaller chunks to prevent field overflow
+        chunks = [slash_cmds[i:i+6] for i in range(0, len(slash_cmds), 6)]  # Reduced chunk size
+        for i, chunk in enumerate(chunks[:2]):  # Limit to 2 chunks only
+            title = "⚡ Primary Slash Commands" if i == 0 else "⚡ More Commands"
+            field_value = "\n".join(chunk)
+            # Ensure field doesn't exceed 1024 characters
+            if len(field_value) > 1000:
+                field_value = field_value[:997] + "..."
+            embed.add_field(name=title, value=field_value, inline=False)
     
-    # Show essential commands prominently
+    # Show essential commands prominently  
     embed.add_field(
-        name="🎯 Most Important Commands",
-        value="`/dotgen_info` - Bot information & features\n`/dotgen_ping` - Check bot status\n`/dotgen_config` - View configuration\n`/dotgen_welcome` - Send welcome message\n`/dotgen_announce` - Send announcements",
+        name="🎯 Essential Commands",
+        value="`/dotgen_info` - Bot info\n`/dotgen_ping` - Bot status\n`/dotgen_config` - Configuration\n`/dotgen_welcome` - Welcome msg\n`/dotgen_announce` - Announcements" + (f"\n`/dotgen_play` - Play music\n`/dotgen_queue` - Music queue" if YOUTUBE_DL_AVAILABLE else ""),
         inline=False
     )
     
-    # Show prefix commands as legacy
+    # Show music commands if available
+    if YOUTUBE_DL_AVAILABLE:
+        embed.add_field(
+            name="🎵 Music Commands",
+            value="`/dotgen_play` - Play music\n`/dotgen_skip` - Skip song\n`/dotgen_queue` - Show queue\n`/dotgen_volume` - Set volume\n`/dotgen_shuffle` - Toggle shuffle\n`/dotgen_loop` - Toggle loop modes",
+            inline=False
+        )
+    
+    # Show prefix commands as legacy (shortened)
     prefix_commands = [cmd.name for cmd in bot.commands if cmd.name not in ['help', 'bot_info']]
     if prefix_commands:
-        legacy_list = [f"`/{name}`" for name in sorted(prefix_commands)[:6]]
+        legacy_list = [f"`/{name}`" for name in sorted(prefix_commands)[:4]]  # Reduced to 4
         embed.add_field(
-            name="🔧 Legacy Prefix Commands (Admin)",
-            value=f"Some admin commands still use `{BOT_PREFIX}` prefix:\n" + " • ".join(legacy_list),
+            name="🔧 Legacy Admin Commands",
+            value=f"Admin commands use `{BOT_PREFIX}` prefix:\n" + " • ".join(legacy_list),
             inline=False
         )
     
     embed.add_field(
-        name="💡 Pro Tips",
-        value="• Slash commands provide autocomplete - just type `/` and start typing!\n• Tab completion shows all available options\n• Slash commands validate input automatically\n• Use `/dotgen_help <command>` for detailed help",
+        name="💡 Tips",
+        value="• Type `/` for autocomplete\n• Tab shows options\n• Slash commands validate input\n• Use `/dotgen_help <command>` for details",
         inline=False
     )
     
@@ -2013,11 +2993,576 @@ async def slash_help(interaction: discord.Interaction, command: str = None):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # =============================================================================
+# MUSIC SLASH COMMANDS
+# =============================================================================
+
+if YOUTUBE_DL_AVAILABLE:
+    @bot.tree.command(name="dotgen_play", description="Play music from YouTube", guild=guild_obj)
+    @app_commands.describe(query="Song name or YouTube URL to play")
+    async def slash_play(interaction: discord.Interaction, query: str):
+        """Slash command to play music"""
+        await interaction.response.defer()
+        
+        # Check if user is in a voice channel
+        if not interaction.user.voice:
+            await interaction.followup.send("❌ You need to be in a voice channel to play music!", ephemeral=True)
+            return
+
+        # Join voice channel
+        voice_client = await join_voice_channel_for_music(interaction)
+        if not voice_client:
+            return
+
+        # Initialize music queue for guild if needed
+        if interaction.guild.id not in music_queues:
+            music_queues[interaction.guild.id] = MusicQueue()
+
+        queue = music_queues[interaction.guild.id]
+
+        try:
+            # Search for the song
+            await interaction.followup.send(f"🔍 Searching for: **{query}**...")
+            
+            # Create the audio source
+            player = await YTDLSource.from_url(query, loop=bot.loop, stream=True, requester=interaction.user)
+            
+            # Add to queue
+            queue.add_song(player)
+            
+            # If nothing is currently playing, start playing
+            if not voice_client.is_playing():
+                await play_next_song(interaction.guild.id, voice_client)
+                embed = discord.Embed(
+                    title="🎵 Now Playing",
+                    description=f"**{player.title}**",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Requested by", value=interaction.user.mention, inline=True)
+                if player.duration:
+                    mins, secs = divmod(player.duration, 60)
+                    embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                await interaction.edit_original_response(content=None, embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="📝 Added to Queue",
+                    description=f"**{player.title}**",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="Requested by", value=interaction.user.mention, inline=True)
+                embed.add_field(name="Position in queue", value=str(len(queue.queue)), inline=True)
+                if player.duration:
+                    mins, secs = divmod(player.duration, 60)
+                    embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                await interaction.edit_original_response(content=None, embed=embed)
+                
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error playing music: {e}")
+
+    @bot.tree.command(name="dotgen_skip", description="Skip the current song", guild=guild_obj)
+    async def slash_skip(interaction: discord.Interaction):
+        """Slash command to skip current song"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not playing any music!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        
+        if voice_client.is_playing():
+            voice_client.stop()
+            embed = discord.Embed(
+                title="⏭️ Song Skipped",
+                description="Playing next song in queue...",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ No music is currently playing!", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_stop", description="Stop music and clear queue", guild=guild_obj)
+    async def slash_stop(interaction: discord.Interaction):
+        """Slash command to stop music and clear queue"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not connected to any voice channel!", ephemeral=True)
+            return
+
+        # Clear queue and stop music
+        if interaction.guild.id in music_queues:
+            music_queues[interaction.guild.id].clear()
+
+        if voice_client.is_playing():
+            voice_client.stop()
+
+        embed = discord.Embed(
+            title="⏹️ Music Stopped",
+            description="Queue cleared and music stopped.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_queue", description="Show the music queue", guild=guild_obj)
+    async def slash_queue(interaction: discord.Interaction):
+        """Slash command to show music queue"""
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        
+        embed = discord.Embed(
+            title="🎵 Music Queue",
+            color=discord.Color.blue()
+        )
+
+        if queue.current:
+            embed.add_field(
+                name="🎵 Now Playing",
+                value=f"**{queue.current.title}**\nRequested by: {queue.current.requester.mention if queue.current.requester else 'Unknown'}",
+                inline=False
+            )
+
+        if queue.queue:
+            queue_text = ""
+            for i, song in enumerate(queue.queue[:10], 1):  # Show first 10 songs
+                queue_text += f"{i}. **{song.title}** - {song.requester.mention if song.requester else 'Unknown'}\n"
+            
+            if len(queue.queue) > 10:
+                queue_text += f"\n... and {len(queue.queue) - 10} more songs"
+            
+            embed.add_field(
+                name=f"📝 Up Next ({len(queue.queue)} songs)",
+                value=queue_text,
+                inline=False
+            )
+        else:
+            if not queue.current:
+                embed.add_field(
+                    name="📝 Queue Status",
+                    value="Queue is empty. Use `/dotgen_play` to add songs!",
+                    inline=False
+                )
+
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_volume", description="Change music volume", guild=guild_obj)
+    @app_commands.describe(volume="Volume level (0-100)")
+    async def slash_volume(interaction: discord.Interaction, volume: int):
+        """Slash command to change music volume"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        if volume < 0 or volume > 100:
+            await interaction.response.send_message("❌ Volume must be between 0 and 100!", ephemeral=True)
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not connected to any voice channel!", ephemeral=True)
+            return
+
+        # Update volume
+        volume_decimal = volume / 100
+        if interaction.guild.id in music_queues:
+            music_queues[interaction.guild.id].volume = volume_decimal
+
+        if voice_client.source:
+            voice_client.source.volume = volume_decimal
+
+        embed = discord.Embed(
+            title="🔊 Volume Changed",
+            description=f"Volume set to **{volume}%**",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_disconnect", description="Disconnect from voice channel", guild=guild_obj)
+    async def slash_disconnect(interaction: discord.Interaction):
+        """Slash command to disconnect from voice channel"""
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not connected to any voice channel!", ephemeral=True)
+            return
+
+        # Clear queue and disconnect
+        if interaction.guild.id in music_queues:
+            music_queues[interaction.guild.id].clear()
+            del music_queues[interaction.guild.id]
+
+        if interaction.guild.id in voice_clients:
+            del voice_clients[interaction.guild.id]
+
+        await voice_client.disconnect()
+        
+        embed = discord.Embed(
+            title="👋 Disconnected",
+            description="Disconnected from voice channel and cleared queue.",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_shuffle", description="Toggle shuffle mode for the queue", guild=guild_obj)
+    async def slash_shuffle(interaction: discord.Interaction):
+        """Slash command to toggle shuffle mode"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        queue.shuffle_enabled = not queue.shuffle_enabled
+        
+        if queue.shuffle_enabled:
+            queue.shuffle()
+            embed = discord.Embed(
+                title="🔀 Shuffle Enabled",
+                description="Queue has been shuffled and shuffle mode is now ON.",
+                color=discord.Color.green()
+            )
+        else:
+            embed = discord.Embed(
+                title="🔀 Shuffle Disabled",
+                description="Shuffle mode is now OFF. Songs will play in order.",
+                color=discord.Color.orange()
+            )
+        
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_loop", description="Toggle loop mode (current song or queue)", guild=guild_obj)
+    @app_commands.describe(mode="Loop mode: 'song' for current song, 'queue' for entire queue, 'off' to disable")
+    async def slash_loop(interaction: discord.Interaction, mode: str = "song"):
+        """Slash command to toggle loop modes"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        mode = mode.lower()
+        
+        if mode == "song":
+            queue.loop = True
+            queue.loop_queue = False
+            embed = discord.Embed(
+                title="🔂 Loop Song",
+                description="Current song will loop until disabled.",
+                color=discord.Color.blue()
+            )
+        elif mode == "queue":
+            queue.loop = False
+            queue.loop_queue = True
+            embed = discord.Embed(
+                title="🔁 Loop Queue",
+                description="Entire queue will loop when finished.",
+                color=discord.Color.blue()
+            )
+        elif mode == "off":
+            queue.loop = False
+            queue.loop_queue = False
+            embed = discord.Embed(
+                title="➡️ Loop Disabled",
+                description="Loop mode has been turned off.",
+                color=discord.Color.orange()
+            )
+        else:
+            await interaction.response.send_message("❌ Invalid mode! Use 'song', 'queue', or 'off'.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_previous", description="Play the previous song", guild=guild_obj)
+    async def slash_previous(interaction: discord.Interaction):
+        """Slash command to play previous song"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not connected to any voice channel!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        previous_song = queue.previous()
+        
+        if previous_song:
+            voice_client.stop()  # This will trigger the next song to play
+            embed = discord.Embed(
+                title="⏮️ Playing Previous",
+                description=f"**{previous_song.title}**",
+                color=discord.Color.blue()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ No previous song in history!", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_remove", description="Remove a song from the queue", guild=guild_obj)
+    @app_commands.describe(position="Position of the song to remove (1-based)")
+    async def slash_remove(interaction: discord.Interaction, position: int):
+        """Slash command to remove a song from queue"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        
+        if position < 1 or position > len(queue.queue):
+            await interaction.response.send_message(f"❌ Invalid position! Queue has {len(queue.queue)} songs.", ephemeral=True)
+            return
+
+        removed_song = queue.remove_song(position - 1)
+        if removed_song:
+            embed = discord.Embed(
+                title="🗑️ Song Removed",
+                description=f"Removed **{removed_song.title}** from position {position}",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ Failed to remove song!", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_move", description="Move a song to a different position in queue", guild=guild_obj)
+    @app_commands.describe(from_pos="Current position of the song", to_pos="New position for the song")
+    async def slash_move(interaction: discord.Interaction, from_pos: int, to_pos: int):
+        """Slash command to move a song in the queue"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        
+        if from_pos < 1 or from_pos > len(queue.queue) or to_pos < 1 or to_pos > len(queue.queue):
+            await interaction.response.send_message(f"❌ Invalid positions! Queue has {len(queue.queue)} songs.", ephemeral=True)
+            return
+
+        if queue.move_song(from_pos - 1, to_pos - 1):
+            embed = discord.Embed(
+                title="↔️ Song Moved",
+                description=f"Moved song from position {from_pos} to position {to_pos}",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ Failed to move song!", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_nowplaying", description="Show currently playing song with progress", guild=guild_obj)
+    async def slash_nowplaying(interaction: discord.Interaction):
+        """Slash command to show now playing with detailed info"""
+        voice_client = interaction.guild.voice_client
+        if not voice_client or not voice_client.is_playing():
+            await interaction.response.send_message("❌ Nothing is currently playing!", ephemeral=True)
+            return
+
+        if interaction.guild.id not in music_queues:
+            await interaction.response.send_message("❌ No music queue found!", ephemeral=True)
+            return
+
+        queue = music_queues[interaction.guild.id]
+        current = queue.current
+        
+        if not current:
+            await interaction.response.send_message("❌ No current song information available!", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🎵 Now Playing",
+            description=f"**{current.title}**",
+            color=discord.Color.green()
+        )
+        
+        if current.requester:
+            embed.add_field(name="Requested by", value=current.requester.mention, inline=True)
+        
+        if current.duration:
+            mins, secs = divmod(current.duration, 60)
+            embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+        
+        # Queue info
+        queue_info = queue.get_queue_info()
+        embed.add_field(name="Volume", value=f"{queue_info['volume']}%", inline=True)
+        embed.add_field(name="Queue Length", value=str(queue_info['queue_length']), inline=True)
+        
+        # Loop status
+        loop_status = "🔂 Song" if queue.loop else "🔁 Queue" if queue.loop_queue else "➡️ Off"
+        embed.add_field(name="Loop", value=loop_status, inline=True)
+        embed.add_field(name="Shuffle", value="🔀 On" if queue.shuffle_enabled else "📝 Off", inline=True)
+        
+        if current.url:
+            embed.add_field(name="Source", value=f"[YouTube Link]({current.url})", inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_search", description="Search for songs without playing immediately", guild=guild_obj)
+    @app_commands.describe(query="Search query for songs")
+    async def slash_search(interaction: discord.Interaction, query: str):
+        """Slash command to search for songs and show results"""
+        await interaction.response.defer()
+        
+        try:
+            # Search for multiple results
+            loop = asyncio.get_event_loop()
+            search_query = f"ytsearch5:{query}"  # Search for 5 results
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
+            
+            if not data or 'entries' not in data or not data['entries']:
+                await interaction.followup.send("❌ No results found for your search!")
+                return
+            
+            embed = discord.Embed(
+                title="🔍 Search Results",
+                description=f"Search results for: **{query}**",
+                color=discord.Color.blue()
+            )
+            
+            for i, entry in enumerate(data['entries'][:5], 1):
+                title = entry.get('title', 'Unknown Title')
+                duration = entry.get('duration')
+                uploader = entry.get('uploader', 'Unknown')
+                
+                duration_str = "Unknown"
+                if duration:
+                    mins, secs = divmod(duration, 60)
+                    duration_str = f"{mins}:{secs:02d}"
+                
+                embed.add_field(
+                    name=f"{i}. {title[:50]}{'...' if len(title) > 50 else ''}",
+                    value=f"**Duration:** {duration_str} | **Uploader:** {uploader[:30]}",
+                    inline=False
+                )
+            
+            embed.set_footer(text="Use /dotgen_play <song name> to add songs to queue")
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Search failed: {e}")
+
+    async def join_voice_channel_for_music(interaction):
+        """Join the voice channel for music commands"""
+        channel = interaction.user.voice.channel
+        
+        # Check if bot is already connected to voice
+        if interaction.guild.voice_client:
+            if interaction.guild.voice_client.channel == channel:
+                return interaction.guild.voice_client
+            else:
+                await interaction.guild.voice_client.move_to(channel)
+                return interaction.guild.voice_client
+        
+        # Connect to voice channel
+        try:
+            voice_client = await channel.connect()
+            voice_clients[interaction.guild.id] = voice_client
+            return voice_client
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to connect to voice channel: {e}")
+            return None
+
+else:
+    # Add disabled music commands when youtube-dl is not available
+    @bot.tree.command(name="dotgen_play", description="Play music from YouTube (DISABLED - requires yt-dlp)", guild=guild_obj)
+    async def slash_play_disabled(interaction: discord.Interaction, query: str):
+        await interaction.response.send_message(
+            "❌ Music functionality is disabled. Please install yt-dlp:\n```pip install yt-dlp```", 
+            ephemeral=True
+        )
+
+# =============================================================================
+# END MUSIC SLASH COMMANDS
+# =============================================================================
+
+# =============================================================================
 # END SLASH COMMANDS
 # =============================================================================
 
-# This is the end of the file. The bot code above this line is responsible for
-# the main functionality of the DOTGEN.AI Discord bot, including dynamic voice
-# channels, welcome messages, and administrative commands. The bot also includes
-# a webserver for 24/7 operation on cloud platforms, and uses advanced features
-# like privileged intents and rotating status messages.
+# Bot configuration
+if __name__ == "__main__":
+    if not TOKEN:
+        print("❌ DISCORD_TOKEN not found in environment variables!")
+        print("Please create a .env file with your bot token:")
+        print("DISCORD_TOKEN=your_bot_token_here")
+        sys.exit(1)
+    else:
+        print("🤖 Starting DOTGEN.AI Discord Bot...")
+        print("📋 Configuration loaded:")
+        print(f"   - Welcome Channel ID: {WELCOME_CHANNEL_ID or 'Not set'}")
+        print(f"   - Lobby Voice Channel ID: {LOBBY_VOICE_CHANNEL_ID or 'Not set'}")
+        print(f"   - Voice Log Channel ID: {VOICE_LOG_CHANNEL_ID or 'Not set'}")
+        print(f"   - Voice Category ID: {VOICE_CATEGORY_ID or 'Not set'}")
+        print(f"   - Guild ID: {GUILD_ID or 'Not set'}")
+        print(f"   - Default Role ID: {DEFAULT_ROLE_ID or 'Not set'}")
+        print(f"   - Allowed Roles: {len(ALLOWED_ROLES)} role(s) configured" if ALLOWED_ROLES else "   - Allowed Roles: All users allowed")
+        print(f"   - Bot Prefix: {BOT_PREFIX}")
+        print(f"   - Max Voice Limit: {MAX_VOICE_LIMIT}")
+        print()        
+        if not privileged_intents_available:
+            print("⚠️  RUNNING IN LIMITED MODE:")
+            print("   - No automatic member join detection")
+            print(f"   - Use {BOT_PREFIX}welcome @member for welcome messages")
+            print("   - Voice channels work normally")
+            print()
+        
+        try:
+            # Start the webserver for 24/7 keepalive (if Flask is available)
+            webserver_started = start_webserver()
+            if webserver_started:
+                print("🌐 Webserver started for 24/7 operation")
+            else:
+                print("⚠️  Running without webserver - bot may sleep on some cloud platforms")
+            
+            # Start the bot
+            bot.run(TOKEN)
+        except discord.errors.PrivilegedIntentsRequired:
+            print("\n❌ PRIVILEGED INTENTS ERROR!")
+            print("🔧 To fix this, go to:")
+            print("   1. https://discord.com/developers/applications/")
+            print("   2. Select your bot application")
+            print("   3. Go to the 'Bot' section")
+            print("   4. Enable these Privileged Gateway Intents:")
+            print("      ✅ SERVER MEMBERS INTENT")
+            print("      ✅ MESSAGE CONTENT INTENT")
+            print("   5. Save changes and restart the bot")
+            print()
+            print("🆘 Alternative: The bot will automatically run in limited mode")
+            print("   if privileged intents are not available.")
+            sys.exit(1)
+        except discord.errors.LoginFailure:
+            print("\n❌ LOGIN FAILED!")
+            print("🔧 Check that your bot token is correct in the .env file")
+            sys.exit(1)
+        except Exception as e:
+            print(f"\n❌ UNEXPECTED ERROR: {e}")
+            print("🔧 Please check your internet connection and try again")
+            sys.exit(1)
+
+

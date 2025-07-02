@@ -1,23 +1,521 @@
-# Dotgen Discord Bot
+# 🤖 DOTGEN.AI Discord Bot
 
-A Discord bot with unique welcome messages and dynamic voice channel creation based on user roles.
+Advanced Discord bot with dynamic voice channels, high-quality ad-free music player, welcome system, and comprehensive admin tools.
 
-## Features
+## ✨ Features
 
-### 🎉 Welcome System
-- Sends unique, randomized welcome messages when new members join
-- Beautiful embed messages with member information
-- Displays member count and account creation date
-- Automatically finds appropriate welcome channel
+- 🎵 **Advanced Music Player** - High-quality, ad-free music streaming from YouTube with queue management
+- 🎤 **Dynamic Voice Channels** - Auto-create temporary voice channels based on user roles
+- 🎉 **Welcome System** - Custom welcome images and messages for new members
+- 📝 **Comprehensive Logging** - Track all server activity including joins, leaves, and voice activity
+- 🔧 **Admin Tools** - Server management, announcements, and configuration
+- 🌐 **24/7 Uptime** - Built for cloud deployment with keepalive webserver
+- ⚡ **Modern Interface** - Both slash commands and legacy prefix commands supported
+- 🎛️ **Advanced Music Controls** - Shuffle, loop, queue management, search, volume control
+
+## 📋 Prerequisites
+
+### Required Software
+1. **Python 3.8+** - [Download Python](https://www.python.org/downloads/)
+2. **FFmpeg** - [Download FFmpeg](https://ffmpeg.org/download.html)
+   - **Windows**: Download and add to PATH
+   - **Linux**: `sudo apt install ffmpeg`
+   - **macOS**: `brew install ffmpeg`
+
+### Discord Bot Setup
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Create a new application and go to "Bot" section
+3. Create a bot and copy the bot token
+4. **Enable Privileged Gateway Intents**:
+   - ✅ **SERVER MEMBERS INTENT**
+   - ✅ **MESSAGE CONTENT INTENT**
+   - ✅ **PRESENCE INTENT** (optional)
+5. **Bot Permissions**: Administrator (or minimum required permissions)
+
+## 🚀 Installation
+
+### 1. Clone/Download
+```bash
+git clone <repository-url>
+cd Discord-Bot
+```
+
+### 2. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Configuration
+Create a `.env` file in the project root:
+
+```env
+# REQUIRED - Your Discord bot token
+DISCORD_TOKEN=your_bot_token_here
+
+# OPTIONAL - Channel Configuration
+WELCOME_CHANNEL_ID=123456789012345678    # Channel for welcome messages
+LOBBY_VOICE_CHANNEL_ID=123456789012345678 # "Join to Create" voice channel
+VOICE_LOG_CHANNEL_ID=123456789012345678   # Voice activity logs
+VOICE_CATEGORY_ID=123456789012345678      # Category for temp voice channels
+
+# OPTIONAL - Logging Channels
+MEMBER_LOG_CHANNEL_ID=123456789012345678     # Member join/leave logs
+ROLE_LOG_CHANNEL_ID=123456789012345678       # Role change logs  
+MESSAGE_LOG_CHANNEL_ID=123456789012345678    # Message edit/delete logs
+MODERATION_LOG_CHANNEL_ID=123456789012345678 # General moderation logs
+
+# OPTIONAL - Role Configuration
+DEFAULT_ROLE_ID=123456789012345678           # Default role for voice channels
+AUTO_ROLE_ID=123456789012345678              # Auto-assign role for new members
+ALLOWED_ROLES=123456789012345678,987654321098765432  # Roles that can create voice channels
+SPECIFIC_VC_ROLE_IDS=123456789012345678,987654321098765432  # Specific roles for voice channel naming
+
+# OPTIONAL - Server Configuration
+GUILD_ID=123456789012345678                  # Guild ID for slash command sync
+BOT_PREFIX=!                                 # Command prefix (default: !)
+MAX_VOICE_CHANNEL_LIMIT=10                   # Max temporary voice channels
+```
+
+### 4. Run the Bot
+```bash
+python main.py
+```
+
+## 🎵 Music Commands
+
+### 🎯 Essential Music Commands
+| Slash Command | Prefix Command | Description |
+|---------------|----------------|-------------|
+| `/dotgen_play <song>` | `!play <song>` | Play music from YouTube (URL or search) |
+| `/dotgen_skip` | `!skip` | Skip the current song |
+| `/dotgen_stop` | `!stop` | Stop music and clear queue |
+| `/dotgen_queue` | `!queue` | Show the music queue |
+| `/dotgen_disconnect` | `!disconnect` | Disconnect from voice channel |
+
+### 🎛️ Advanced Music Controls
+| Slash Command | Prefix Command | Description |
+|---------------|----------------|-------------|
+| `/dotgen_shuffle` | `!shuffle` | Toggle shuffle mode on/off |
+| `/dotgen_loop [mode]` | `!loop [mode]` | Loop current song or entire queue |
+| `/dotgen_previous` | `!previous` | Play the previous song |
+| `/dotgen_volume <1-100>` | `!volume <1-100>` | Change music volume |
+| `/dotgen_nowplaying` | `!nowplaying` | Show currently playing song with progress |
+| `/dotgen_search <query>` | `!search <query>` | Search for songs without playing |
+| `/dotgen_remove <position>` | `!remove <position>` | Remove song from queue |
+| `/dotgen_move <from> <to>` | `!move <from> <to>` | Move song to different position |
+
+### 🎵 Music Features
+- **Ad-Free Playback**: Advanced anti-ad measures and high-quality audio extraction
+- **Auto-Join**: Bot automatically joins your current voice channel
+- **Smart Queue**: Add multiple songs, view upcoming tracks
+- **Loop Modes**: Loop single song or entire queue
+- **Shuffle**: Randomize queue playback order
+- **Volume Control**: Adjust volume from 1-100%
+- **Progress Tracking**: See song progress and duration
+- **Search**: Find songs without immediately playing them
+- **Queue Management**: Remove, move, and reorder songs
+
+## 🤖 Bot Commands
+
+### 🎯 Essential Commands
+| Slash Command | Prefix Command | Description |
+|---------------|----------------|-------------|
+| `/dotgen_help` | `!help` | Show all available commands |
+| `/dotgen_info` | `!info` | Display bot information and features |
+| `/dotgen_ping` | `!ping` | Check bot latency and status |
+| `/dotgen_config` | `!config` | View current bot configuration |
+
+### 👋 Welcome System
+| Slash Command | Prefix Command | Description |
+|---------------|----------------|-------------|
+| `/dotgen_welcome [@member]` | `!welcome [@member]` | Send welcome message for a member |
+| - | `!setup_welcome` | Configure welcome channel |
+
+### 📢 Admin Commands
+| Slash Command | Prefix Command | Description |
+|---------------|----------------|-------------|
+| `/dotgen_announce <channel> <message>` | `!announce <channel> <message>` | Send announcement to channel |
+| - | `!setup_logging` | Configure logging channels |
+| - | `!setup_lobby` | Set up voice channel lobby |
+| - | `!cleanup_voice` | Clean up temporary voice channels |
+
+### 🎤 Voice Channel Commands
+| Command | Description |
+|---------|-------------|
+| `!setup_lobby` | Create "Join to Create" voice channel |
+| `!cleanup_voice` | Remove all temporary voice channels |
+| `!voice_limit <number>` | Set user limit for new voice channels |
+
+## ⚙️ Configuration
+
+### Required Permissions
+The bot needs these permissions in your Discord server:
+- **Administrator** (recommended) OR these specific permissions:
+  - View Channels
+  - Send Messages
+  - Embed Links
+  - Attach Files
+  - Read Message History
+  - Connect to Voice
+  - Speak in Voice
+  - Manage Channels
+  - Manage Messages
+  - Manage Roles
+
+### Voice Channel Setup
+1. Run `!setup_lobby` to create the "Join to Create" channel
+2. Users joining this channel will trigger automatic voice channel creation
+3. Channels are named based on the user's highest role
+4. Empty channels are automatically deleted
+
+### Music Setup
+1. Ensure FFmpeg is installed and in your system PATH
+2. Bot will automatically join your voice channel when you use music commands
+3. High-quality, ad-free audio is automatically configured
+4. Supports YouTube URLs and search queries
+
+## 🌐 24/7 Deployment
+
+### Cloud Deployment Options
+- **Railway**: Easy deployment with automatic git integration
+- **Heroku**: Free tier available with hobby dynos
+- **Replit**: Simple setup for educational use
+- **VPS**: Full control with services like DigitalOcean or AWS
+
+### Deployment Tips
+1. Set up environment variables in your hosting platform
+2. Ensure FFmpeg is available in the deployment environment
+3. Configure keep-alive settings for 24/7 operation
+4. Monitor logs for any deployment issues
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### Bot Not Responding
+- ✅ Check bot token in `.env` file
+- ✅ Verify bot permissions in Discord server
+- ✅ Ensure bot is online and invite link is valid
+
+#### Music Not Playing
+- ✅ Install FFmpeg and add to system PATH
+- ✅ Check bot has Connect and Speak permissions in voice channels
+- ✅ Verify yt-dlp is installed: `pip install yt-dlp`
+- ✅ Try a different YouTube video/search term
+
+#### Voice Channels Not Creating
+- ✅ Run `!setup_lobby` to create the lobby channel
+- ✅ Ensure bot has "Manage Channels" permission
+- ✅ Check voice category configuration in `.env`
+
+#### Slash Commands Not Working
+- ✅ Wait up to 1 hour for global slash command sync
+- ✅ Use GUILD_ID in `.env` for instant local testing
+- ✅ Check bot has necessary permissions
+
+### Error Messages
+- **"Missing FFmpeg"**: Install FFmpeg and restart bot
+- **"No voice channel"**: Join a voice channel before using music commands
+- **"Permission denied"**: Check bot permissions in server settings
+- **"Invalid token"**: Verify DISCORD_TOKEN in `.env` file
+
+## 📊 Features Overview
+
+### 🎵 Music Player
+- High-quality audio streaming (up to 320kbps)
+- Advanced ad-blocking technology
+- YouTube support with search functionality
+- Queue management with shuffle and loop
+- Volume control and progress tracking
+- Auto-join voice channels
 
 ### 🎤 Dynamic Voice Channels
-- Creates temporary voice channels based on user roles
-- Users join a "Join to Create" lobby channel
-- Bot creates a new voice channel named after their highest role
-- Automatic cleanup when channels become empty
-- Role-based permissions for created channels
+- Automatic channel creation based on user roles
+- Customizable permissions and user limits
+- Auto-cleanup when channels become empty
+- Role-based channel naming
 
-## Setup Instructions
+### 🎉 Welcome System
+- Custom welcome images with member avatars
+- Random welcome message selection
+- Member count and join date display
+- Automatic role assignment
+
+### 📝 Comprehensive Logging
+- Member join/leave tracking
+- Voice channel activity logs
+- Message edit/delete logs
+- Role change notifications
+- Moderation action logs
+
+## 💡 Tips & Best Practices
+
+### Music Usage
+- Use `/dotgen_play` instead of `!play` for better autocomplete
+- Queue multiple songs at once for continuous playback
+- Use shuffle mode for variety in long playlists
+- Adjust volume before playing for better experience
+
+### Administration
+- Set up logging channels for better server monitoring
+- Use role-based permissions for voice channel creation
+- Configure welcome channels for new member engagement
+- Regular cleanup of temporary channels
+
+### Performance
+- Monitor bot CPU usage during heavy music usage
+- Consider voice channel limits to prevent spam
+- Use slash commands for better user experience
+- Enable privileged intents for full functionality
+
+## 🆘 Support
+
+### Getting Help
+1. Check this README for common solutions
+2. Review console output for error messages
+3. Verify all permissions and configuration
+4. Test with minimal configuration first
+
+### Development
+- Bot uses discord.py 2.3.0+
+- Modern async/await patterns
+- Comprehensive error handling
+- Modular command structure
+
+---
+
+**🌟 Enjoy your advanced Discord bot with high-quality music and comprehensive server management!**
+# Required
+DISCORD_TOKEN=your_bot_token_here
+
+# Optional Configuration
+WELCOME_CHANNEL_ID=123456789012345678
+LOBBY_VOICE_CHANNEL_ID=123456789012345678
+VOICE_LOG_CHANNEL_ID=123456789012345678
+VOICE_CATEGORY_ID=123456789012345678
+GUILD_ID=123456789012345678
+DEFAULT_ROLE_ID=123456789012345678
+AUTO_ROLE_ID=123456789012345678
+BOT_PREFIX=!
+MAX_VOICE_CHANNEL_LIMIT=10
+
+# Logging Channels
+MEMBER_LOG_CHANNEL_ID=123456789012345678
+ROLE_LOG_CHANNEL_ID=123456789012345678
+MESSAGE_LOG_CHANNEL_ID=123456789012345678
+MODERATION_LOG_CHANNEL_ID=123456789012345678
+
+# Role-based Access
+ALLOWED_ROLES=123456789012345678,987654321098765432
+SPECIFIC_VC_ROLE_IDS=123456789012345678,987654321098765432
+
+# Deployment (Optional)
+PORT=8080
+```
+
+### 4. Run the Bot
+```bash
+python main.py
+```
+
+## 🎵 Music Commands
+
+### Slash Commands (Recommended)
+| Command | Description | Usage |
+|---------|-------------|-------|
+| `/dotgen_play` | Play music from YouTube | `/dotgen_play Never Gonna Give You Up` |
+| `/dotgen_skip` | Skip current song | `/dotgen_skip` |
+| `/dotgen_stop` | Stop music and clear queue | `/dotgen_stop` |
+| `/dotgen_queue` | Show music queue | `/dotgen_queue` |
+| `/dotgen_volume` | Set volume (0-100) | `/dotgen_volume 50` |
+| `/dotgen_shuffle` | Toggle shuffle mode | `/dotgen_shuffle` |
+| `/dotgen_loop` | Toggle loop mode | `/dotgen_loop song` |
+| `/dotgen_previous` | Play previous song | `/dotgen_previous` |
+| `/dotgen_remove` | Remove song from queue | `/dotgen_remove 3` |
+| `/dotgen_move` | Move song in queue | `/dotgen_move 3 1` |
+| `/dotgen_nowplaying` | Show current song info | `/dotgen_nowplaying` |
+| `/dotgen_search` | Search for songs | `/dotgen_search acoustic guitar` |
+| `/dotgen_disconnect` | Disconnect from voice | `/dotgen_disconnect` |
+
+### Legacy Prefix Commands
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `!play <song>` | `!p` | Play music |
+| `!skip` | `!s` | Skip current song |
+| `!stop` | | Stop music |
+| `!queue` | `!q` | Show queue |
+| `!volume <0-100>` | `!vol` | Set volume |
+| `!disconnect` | `!dc`, `!leave` | Disconnect |
+
+## 🎤 Voice Channel Commands
+
+| Command | Description |
+|---------|-------------|
+| `!setup_lobby` | Create lobby voice channel |
+| `!voice_stats` | Show voice channel statistics |
+| `!cleanup` | Clean up empty voice channels |
+
+## 👋 Welcome & Admin Commands
+
+### Slash Commands
+| Command | Description | Permissions |
+|---------|-------------|-------------|
+| `/dotgen_welcome` | Send welcome message | Manage Messages |
+| `/dotgen_announce` | Send announcement | Administrator |
+| `/dotgen_config` | View bot configuration | Administrator |
+| `/dotgen_help` | Show all commands | Everyone |
+| `/dotgen_info` | Bot information | Everyone |
+| `/dotgen_ping` | Check bot status | Everyone |
+
+### Prefix Commands
+| Command | Description | Permissions |
+|---------|-------------|-------------|
+| `!welcome @user` | Manual welcome | Everyone |
+| `!announce <channel> <message>` | Send announcement | Administrator |
+| `!config` | View configuration | Administrator |
+| `!setup_logging` | Setup logging channels | Administrator |
+| `!get_ids` | Get channel IDs | Administrator |
+
+## 🔧 Admin & Management Commands
+
+| Command | Aliases | Description | Permissions |
+|---------|---------|-------------|-------------|
+| `!add_role @role` | | Add allowed role for VC | Administrator |
+| `!remove_role @role` | | Remove allowed role | Administrator |
+| `!list_roles` | `!roles` | List allowed roles | Administrator |
+| `!send <channel> <message>` | | Send message as bot | Administrator |
+| `!echo <message>` | | Repeat message | Manage Messages |
+| `!botstatus` | `!activity` | Control bot status | Administrator |
+
+## 📊 Information Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `!bot_info` | `!info` | Bot information |
+| `!ping` | | Check bot latency |
+| `!help [command]` | | Dynamic help system |
+
+## ⚙️ Configuration Guide
+
+### Channel IDs Setup
+1. Enable Developer Mode in Discord
+2. Right-click channels → "Copy ID"
+3. Add IDs to `.env` file
+4. Use `!get_ids` command for help
+
+### Voice Channel Setup
+1. Use `!setup_lobby` to create lobby channel
+2. Set `LOBBY_VOICE_CHANNEL_ID` in `.env`
+3. Users join lobby → auto-create temporary channels
+4. Channels auto-delete when empty
+
+### Logging Setup
+1. Create log channels (`#member-logs`, `#voice-logs`, etc.)
+2. Get channel IDs with `!get_ids`
+3. Set in `.env` file
+4. Use `!setup_logging` for detailed setup
+
+### Role-based Access
+- `ALLOWED_ROLES`: Who can create voice channels
+- `SPECIFIC_VC_ROLE_IDS`: Special voice channel roles
+- `AUTO_ROLE_ID`: Role given to new members
+
+## 🎵 Music Features
+
+### Advanced Features
+- **Ad-free Playback** - Optimized for clean audio streams
+- **Queue Management** - Add, remove, move, shuffle songs
+- **Loop Modes** - Loop current song or entire queue
+- **History** - Track and replay previous songs
+- **Volume Control** - Per-server volume settings
+- **Search** - Preview songs before adding to queue
+- **Auto-join** - Bot joins your voice channel automatically
+
+### Supported Sources
+- YouTube (primary)
+- YouTube Music
+- Direct audio links
+- Playlists (coming soon)
+
+### Audio Quality
+- High-quality audio (192kbps MP3)
+- No ads or interruptions
+- Optimized for Discord voice channels
+- FFmpeg audio processing
+
+## 🌐 Deployment
+
+### Local Development
+```bash
+python main.py
+```
+
+### Cloud Deployment (Heroku, Railway, etc.)
+1. Set environment variables in platform
+2. Include `Procfile`:
+   ```
+   worker: python main.py
+   ```
+3. Enable webserver for keepalive
+4. Bot includes automatic uptime monitoring
+
+### Docker Deployment
+```dockerfile
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["python", "main.py"]
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+**Music not working:**
+- Install FFmpeg and add to PATH
+- Install yt-dlp: `pip install yt-dlp`
+- Check voice channel permissions
+
+**Commands not showing:**
+- Enable privileged intents in Discord Developer Portal
+- Wait up to 1 hour for global slash command sync
+- Use guild-specific sync with `GUILD_ID` in `.env`
+
+**Permission errors:**
+- Check bot has required permissions in Discord
+- Verify role hierarchy (bot role above managed roles)
+
+**Bot disconnecting:**
+- Enable webserver with Flask
+- Use process manager (PM2, systemd)
+- Check hosting platform requirements
+
+### Getting Help
+1. Check console output for errors
+2. Use `!config` to verify setup
+3. Ensure all IDs in `.env` are correct
+4. Verify Discord permissions
+
+## 📝 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🚀 Features in Development
+
+- [ ] Playlist support
+- [ ] Spotify integration
+- [ ] Custom sound effects
+- [ ] Advanced admin dashboard
+- [ ] Multi-language support
+- [ ] Voice channel templates
+
+---
+
+**Made with ❤️ for the Discord community**
+
+*For support, issues, or feature requests, please check the repository issues or contact the development team.*
 
 ### 1. Create a Discord Application
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
