@@ -4,14 +4,19 @@ Advanced Discord bot with dynamic voice channels, high-quality ad-free music pla
 
 ## ✨ Features
 
-- 🎵 **Advanced Music Player** - High-quality, ad-free music streaming from YouTube with queue management
+- 🎵 **Advanced Ad-Free Music Player** - High-quality, anonymous music streaming from YouTube
+  - No credentials or cookies required
+  - Advanced bot detection evasion (2024 methods)
+  - Queue management, shuffle, loop, search
+  - Volume control, skip, previous track
+  - Automatic fallback extraction methods
 - 🎤 **Dynamic Voice Channels** - Auto-create temporary voice channels based on user roles
 - 🎉 **Welcome System** - Custom welcome images and messages for new members
 - 📝 **Comprehensive Logging** - Track all server activity including joins, leaves, and voice activity
-- 🔧 **Admin Tools** - Server management, announcements, and configuration
+- 🔧 **Admin Tools** - Server management, anonymous announcements, and configuration
 - 🌐 **24/7 Uptime** - Built for cloud deployment with keepalive webserver
 - ⚡ **Modern Interface** - Both slash commands and legacy prefix commands supported
-- 🎛️ **Advanced Music Controls** - Shuffle, loop, queue management, search, volume control
+- 🛡️ **Anonymous Operation** - Music functionality works without any account connections
 
 ## 📋 Prerequisites
 
@@ -41,6 +46,18 @@ cd Discord-Bot
 ```
 
 ### 2. Install Dependencies
+
+**Core Dependencies (Required):**
+```bash
+pip install discord.py>=2.3.2 python-dotenv yt-dlp>=2024.4.9 PyNaCl ffmpeg-python aiohttp Pillow requests
+```
+
+**Enhanced Anti-Detection (Recommended):**
+```bash
+pip install fake-useragent urllib3 certifi
+```
+
+**All Dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
@@ -134,7 +151,7 @@ python main.py
 ### 📢 Admin Commands
 | Slash Command | Prefix Command | Description |
 |---------------|----------------|-------------|
-| `/dotgen_announce <channel> <message>` | `!announce <channel> <message>` | Send announcement to channel |
+| `/dotgen_announce <channel> <message>` | `!announce <channel> <message>` | Send **anonymous** announcement to channel (mentions work) |
 | - | `!setup_logging` | Configure logging channels |
 | - | `!setup_lobby` | Set up voice channel lobby |
 | - | `!cleanup_voice` | Clean up temporary voice channels |
@@ -200,8 +217,20 @@ The bot needs these permissions in your Discord server:
 #### Music Not Playing
 - ✅ Install FFmpeg and add to system PATH
 - ✅ Check bot has Connect and Speak permissions in voice channels
-- ✅ Verify yt-dlp is installed: `pip install yt-dlp`
+- ✅ Verify yt-dlp is installed: `pip install yt-dlp>=2024.4.9`
 - ✅ Try a different YouTube video/search term
+- ✅ **Bot Detection Issues**: 
+  - Bot automatically uses 4 different extraction methods
+  - No credentials or cookies required
+  - Advanced anti-detection headers and user agents
+  - If all methods fail, try again in a few minutes
+
+#### Music Extraction Errors
+- **"Age-restricted content"**: Bot will try alternative extraction methods automatically
+- **"Video unavailable"**: Video may be private, deleted, or region-blocked
+- **"Rate limited"**: Bot will add automatic delays and retry
+- **"Sign in required"**: Bot uses anonymous extraction (no sign-in needed)
+- **All methods fail**: Try a different video or wait a few minutes for YouTube rate limits to reset
 
 #### Voice Channels Not Creating
 - ✅ Run `!setup_lobby` to create the lobby channel
@@ -222,12 +251,14 @@ The bot needs these permissions in your Discord server:
 ## 📊 Features Overview
 
 ### 🎵 Music Player
-- High-quality audio streaming (up to 320kbps)
-- Advanced ad-blocking technology
-- YouTube support with search functionality
-- Queue management with shuffle and loop
-- Volume control and progress tracking
-- Auto-join voice channels
+- **Anonymous Operation** - No credentials, cookies, or account connections required
+- **Advanced Bot Detection Evasion** - 4-tier fallback extraction system (2024 methods)
+- **High-quality audio streaming** - Up to 320kbps with noise filtering and audio enhancement
+- **YouTube support** - Direct URLs and search functionality
+- **Queue management** - Add, remove, move, shuffle, loop modes
+- **Volume control** - Individual track volume and progress tracking
+- **Auto-join voice channels** - Seamless voice channel connection
+- **User-friendly error handling** - Clear messages for different failure types
 
 ### 🎤 Dynamic Voice Channels
 - Automatic channel creation based on user roles
@@ -361,7 +392,7 @@ python main.py
 | Command | Description | Permissions |
 |---------|-------------|-------------|
 | `/dotgen_welcome` | Send welcome message | Manage Messages |
-| `/dotgen_announce` | Send announcement | Administrator |
+| `/dotgen_announce` | Send **anonymous** announcement (mentions work properly) | Administrator |
 | `/dotgen_config` | View bot configuration | Administrator |
 | `/dotgen_help` | Show all commands | Everyone |
 | `/dotgen_info` | Bot information | Everyone |

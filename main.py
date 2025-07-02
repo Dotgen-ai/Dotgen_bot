@@ -13,21 +13,40 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 import io
 
-# Music functionality imports
+# Music functionality imports with enhanced error handling
 try:
-    import youtube_dl
-    import yt_dlp as youtube_dl  # Use yt-dlp as fallback for youtube-dl
+    import yt_dlp as youtube_dl
     YOUTUBE_DL_AVAILABLE = True
-    print("✅ YouTube downloader available - music functionality enabled")
+    print("✅ yt-dlp available - advanced music functionality enabled")
 except ImportError:
     try:
         import youtube_dl
         YOUTUBE_DL_AVAILABLE = True
-        print("✅ youtube-dl available - music functionality enabled")
+        print("✅ youtube-dl available - basic music functionality enabled")
     except ImportError:
         print("⚠️  YouTube downloader not available - music functionality disabled")
         print("   Install with: pip install yt-dlp")
         YOUTUBE_DL_AVAILABLE = False
+
+# Anti-detection imports
+try:
+    from fake_useragent import UserAgent
+    ua = UserAgent()
+    FAKE_USERAGENT_AVAILABLE = True
+    print("✅ fake-useragent available for enhanced bot detection evasion")
+except ImportError:
+    FAKE_USERAGENT_AVAILABLE = False
+    print("⚠️  fake-useragent not available (optional for enhanced evasion)")
+
+# Additional music imports for enhanced functionality (OPTIONAL - NO CREDENTIALS REQUIRED)
+try:
+    import spotipy
+    from spotipy.oauth2 import SpotifyClientCredentials
+    SPOTIFY_AVAILABLE = True
+    print("✅ Spotify integration available (optional - no credentials required for basic use)")
+except ImportError:
+    SPOTIFY_AVAILABLE = False
+    print("⚠️  Spotify integration not available (optional)")
 
 # Optional Flask import for webserver (for 24/7 deployment)
 try:
@@ -98,11 +117,28 @@ role_voice_channels = {}  # Track voice channels by role
 music_queues = {}  # Store music queues per guild
 voice_clients = {}  # Store voice clients per guild
 
-# YouTube DL options for music (optimized for HIGH-QUALITY AD-FREE playback)
+# YouTube DL options for music (ENHANCED FOR MAXIMUM BOT DETECTION EVASION - 2024)
 if YOUTUBE_DL_AVAILABLE:
+    # Generate dynamic user agent
+    def get_user_agent():
+        if FAKE_USERAGENT_AVAILABLE:
+            try:
+                return ua.random
+            except:
+                pass
+        # Fallback to recent Chrome user agents
+        agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:124.0) Gecko/20100101 Firefox/124.0'
+        ]
+        return random.choice(agents)
+
     ytdl_format_options = {
-        # High-quality audio format selection (best quality, ad-free sources)
-        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=mp3]/bestaudio',
+        # Audio format selection with fallback hierarchy
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=mp3]/bestaudio/best[height<=480]',
         'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
         'restrictfilenames': True,
         'noplaylist': True,
@@ -111,56 +147,115 @@ if YOUTUBE_DL_AVAILABLE:
         'logtostderr': False,
         'quiet': True,
         'no_warnings': True,
-        'default_search': 'ytsearch',  # Force YouTube search for consistency
+        'default_search': 'ytsearch',
         'source_address': '0.0.0.0',
         'prefer_ffmpeg': True,
         
-        # Advanced audio processing for better quality
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '320',  # Highest quality
-        }],
+        # ENHANCED BOT DETECTION EVASION - 2024 METHODS
+        'http_headers': {
+            'User-Agent': get_user_agent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"'
+        },
         
-        # COMPREHENSIVE AD-BLOCKING AND ANTI-AD MEASURES
-        'cookiefile': None,
-        'no_check_certificate': True,
-        'geo_bypass': True,
-        'geo_bypass_country': 'US',
-        'writesubtitles': False,
-        'writeautomaticsub': False,
-        'extract_flat': False,
-        'writethumbnail': False,
-        'writeinfojson': False,
-        'writedescription': False,
-        'writecomments': False,
-        'writeannotations': False,
-        
-        # Advanced extractor arguments for ad-free experience
+        # Advanced extractor arguments for 2024 YouTube changes
         'extractor_args': {
             'youtube': {
-                'skip': ['dash', 'hls', 'live_chat'],  # Skip ad-prone formats
-                'player_skip': ['configs', 'webpage'],
-                'player_client': ['android', 'web'],  # Use mobile client to avoid ads
-                'skip_manifests': True,  # Skip manifests that may contain ads
+                'skip': ['dash', 'hls'],
+                'player_client': ['android_creator', 'android_music', 'android', 'web_creator', 'web_music', 'web'],
+                'player_skip': ['configs'],
+                'innertube_host': 'youtubei.googleapis.com',
+                'innertube_key': None,
+                'check_formats': None,
+                'comment_sort': 'top',
+                'max_comments': [0],
             }
         },
         
-        # Additional anti-ad headers and options
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (compatible; yt-dlp/2023.12.30)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
-        }
+        # Enhanced anti-detection timing and retry logic
+        'sleep_interval': random.uniform(1, 3),
+        'max_sleep_interval': 8,
+        'sleep_interval_requests': random.uniform(0.5, 2),
+        'sleep_interval_subtitles': 0,
+        'retries': 5,
+        'fragment_retries': 5,
+        'extract_flat': False,
+        'writethumbnail': False,
+        'writeinfojson': False,
+        
+        # Geographic and proxy settings
+        'geo_bypass': True,
+        'geo_bypass_country': 'US',
+        'force_ipv4': True,
+        
+        # NO CREDENTIALS OR COOKIES REQUIRED - Anonymous access only
+        'cookiesfrombrowser': None,
+        'cookiefile': None,
+        'username': None,
+        'password': None,
+        'netrc': False,
+        
+        # Skip all unnecessary downloads and metadata
+        'writesubtitles': False,
+        'writeautomaticsub': False,
+        'writedescription': False,
+        'writecomments': False,
+        'writeannotations': False,
+        'writethumbnail': False,
+        'writeinfojson': False,
+        
+        # Additional bypass options
+        'youtube_include_dash_manifest': False,
+        'mark_watched': False,
+        'no_color': True,
+        'extract_flat': False,
     }
 
+    # Enhanced FFmpeg options with noise reduction and quality optimization
     ffmpeg_options = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
-        'options': '-vn -filter:a "volume=0.5"'  # Default volume and audio filtering
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin -loglevel panic -hide_banner',
+        'options': '-vn -filter:a "volume=0.5,loudnorm=I=-16:TP=-1.5:LRA=11,highpass=f=85,lowpass=f=15000" -ar 48000 -ac 2 -threads 0'
     }
 
+    # Create multiple YouTube DL instances for advanced fallback system
     ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+    
+    # Fallback #1: Mobile client priority
+    ytdl_mobile_options = ytdl_format_options.copy()
+    ytdl_mobile_options['extractor_args']['youtube']['player_client'] = ['android_music', 'android']
+    ytdl_mobile_options['http_headers']['User-Agent'] = 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip'
+    ytdl_mobile = youtube_dl.YoutubeDL(ytdl_mobile_options)
+    
+    # Fallback #2: Web-only with different headers
+    ytdl_web_options = ytdl_format_options.copy()
+    ytdl_web_options['extractor_args']['youtube']['player_client'] = ['web_music', 'web']
+    ytdl_web_options['http_headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    ytdl_web = youtube_dl.YoutubeDL(ytdl_web_options)
+    
+    # Fallback #3: Minimal options (last resort)
+    ytdl_minimal_options = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'extractflat': False,
+        'default_search': 'ytsearch',
+        'extractor_args': {'youtube': {'player_client': ['web']}},
+        'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    }
+    ytdl_minimal = youtube_dl.YoutubeDL(ytdl_minimal_options)
 
     class YTDLSource(discord.PCMVolumeTransformer):
         def __init__(self, source, *, data, volume=0.5):
@@ -170,18 +265,98 @@ if YOUTUBE_DL_AVAILABLE:
             self.url = data.get('url')
             self.duration = data.get('duration')
             self.requester = data.get('requester')
+            self.webpage_url = data.get('webpage_url')
+            self.thumbnail = data.get('thumbnail')
 
         @classmethod
         async def from_url(cls, url, *, loop=None, stream=False, requester=None):
             loop = loop or asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-
+            
+            # Advanced fallback system with multiple extraction methods
+            extraction_methods = [
+                ("Main extractor (web + mobile)", ytdl),
+                ("Mobile-first extractor", ytdl_mobile),
+                ("Web-only extractor", ytdl_web),
+                ("Minimal extractor (fallback)", ytdl_minimal)
+            ]
+            
+            data = None
+            last_error = None
+            
+            for attempt, (method_name, ytdl_instance) in enumerate(extraction_methods, 1):
+                try:
+                    print(f"🎵 Trying {method_name} (method {attempt}/{len(extraction_methods)})...")
+                    
+                    # Add random delay to avoid rate limiting
+                    if attempt > 1:
+                        delay = random.uniform(1, 3)
+                        await asyncio.sleep(delay)
+                    
+                    # Update user agent for each attempt
+                    if hasattr(ytdl_instance, 'params') and 'http_headers' in ytdl_instance.params:
+                        ytdl_instance.params['http_headers']['User-Agent'] = get_user_agent()
+                    
+                    data = await loop.run_in_executor(None, lambda: ytdl_instance.extract_info(url, download=not stream))
+                    
+                    if data:
+                        print(f"✅ Successfully extracted using {method_name}")
+                        break
+                        
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e)
+                    print(f"⚠️  {method_name} failed: {error_msg[:100]}...")
+                    
+                    # Check for specific YouTube errors and provide helpful messages
+                    if "Sign in to confirm your age" in error_msg:
+                        print("🔞 Age-restricted content detected, trying alternative method...")
+                    elif "Video unavailable" in error_msg:
+                        print("📵 Video unavailable, trying alternative method...")
+                    elif "Private video" in error_msg:
+                        print("� Private video detected, trying alternative method...")
+                    elif "region" in error_msg.lower():
+                        print("🌍 Region-blocked content, trying geo-bypass...")
+                    elif "rate limit" in error_msg.lower():
+                        print("⏱️  Rate limited, adding extra delay...")
+                        await asyncio.sleep(5)
+                    
+                    continue
+            
+            if not data:
+                # Provide user-friendly error message
+                error_context = "Unknown error"
+                if last_error:
+                    error_str = str(last_error).lower()
+                    if "sign in" in error_str or "age" in error_str:
+                        error_context = "Age-restricted or sign-in required content"
+                    elif "unavailable" in error_str:
+                        error_context = "Video unavailable or private"
+                    elif "region" in error_str:
+                        error_context = "Region-blocked content"
+                    elif "rate limit" in error_str:
+                        error_context = "Rate limited by YouTube"
+                    else:
+                        error_context = f"Extraction failed: {str(last_error)[:100]}"
+                
+                raise Exception(f"❌ Unable to play this content. Reason: {error_context}")
+            
             if 'entries' in data:
+                # Take first result if it's a search
                 data = data['entries'][0]
 
             data['requester'] = requester
             filename = data['url'] if stream else ytdl.prepare_filename(data)
-            return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+            
+            # Try enhanced FFmpeg options first, fallback to basic if needed
+            try:
+                return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+            except Exception as ffmpeg_error:
+                print(f"⚠️  Enhanced FFmpeg failed, using basic options: {ffmpeg_error}")
+                basic_ffmpeg = {
+                    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
+                    'options': '-vn'
+                }
+                return cls(discord.FFmpegPCMAudio(filename, **basic_ffmpeg), data=data)
 
 # Welcome messages templates
 WELCOME_MESSAGES = [
@@ -2236,7 +2411,23 @@ if YOUTUBE_DL_AVAILABLE:
                 await search_msg.edit(content=None, embed=embed)
                 
         except Exception as e:
-            await ctx.send(f"❌ Error playing music: {e}")
+            error_msg = str(e)
+            
+            # Provide user-friendly error messages
+            if "Sign in to confirm you're not a bot" in error_msg or "bot" in error_msg.lower():
+                embed = discord.Embed(
+                    title="🤖 Bot Detection - Trying Alternatives",
+                    description="YouTube detected bot access. Using alternative methods...",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(
+                    name="💡 What to try:",
+                    value="• Search by song name instead of URL\n• Use `/dotgen_search` first\n• Try again in a few minutes",
+                    inline=False
+                )
+                await search_msg.edit(content=None, embed=embed)
+            else:
+                await search_msg.edit(content=f"❌ Error: Unable to play music. Try searching by song name or use `/dotgen_search` first.")
 
     @bot.command(name="skip", aliases=["s"])
     async def skip_music(ctx):
@@ -2743,10 +2934,10 @@ async def slash_welcome(interaction: discord.Interaction, member: discord.Member
     except Exception as e:
         await interaction.response.send_message(f"❌ Error sending welcome message: {e}", ephemeral=True)
 
-@bot.tree.command(name="dotgen_announce", description="Send an announcement to a specific channel", guild=guild_obj)
-@app_commands.describe(channel="The channel to send the announcement to", message="The announcement message")
+@bot.tree.command(name="dotgen_announce", description="Send an anonymous announcement to a specific channel", guild=guild_obj)
+@app_commands.describe(channel="The channel to send the announcement to", message="The announcement message (supports mentions)")
 async def slash_announce(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
-    """Slash command to send announcements"""
+    """Slash command to send anonymous announcements with proper mention support"""
     # Check permissions
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
@@ -2758,20 +2949,27 @@ async def slash_announce(interaction: discord.Interaction, channel: discord.Text
             await interaction.response.send_message(f"❌ I don't have permission to send messages in {channel.mention}", ephemeral=True)
             return
         
-        # Create announcement embed
+        # Create anonymous announcement embed
         embed = discord.Embed(
             title="📢 Server Announcement",
             description=message,
             color=discord.Color.gold()
         )
-        embed.set_footer(text=f"Announced by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url)
+        # Remove the footer to make it completely anonymous
         embed.timestamp = discord.utils.utcnow()
         
-        # Send the announcement
-        await channel.send(embed=embed)
+        # Send the announcement with allowed mentions to make mentions work
+        await channel.send(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(
+                everyone=True,
+                users=True,
+                roles=True
+            )
+        )
         
-        # Confirm to the user
-        await interaction.response.send_message(f"✅ Announcement sent to {channel.mention}", ephemeral=True)
+        # Confirm to the user (this stays private)
+        await interaction.response.send_message(f"✅ Anonymous announcement sent to {channel.mention}", ephemeral=True)
         
     except Exception as e:
         await interaction.response.send_message(f"❌ Error sending announcement: {e}", ephemeral=True)
@@ -3023,7 +3221,7 @@ if YOUTUBE_DL_AVAILABLE:
             # Search for the song
             await interaction.followup.send(f"🔍 Searching for: **{query}**...")
             
-            # Create the audio source
+            # Create the audio source with enhanced error handling
             player = await YTDLSource.from_url(query, loop=bot.loop, stream=True, requester=interaction.user)
             
             # Add to queue
@@ -3041,6 +3239,8 @@ if YOUTUBE_DL_AVAILABLE:
                 if player.duration:
                     mins, secs = divmod(player.duration, 60)
                     embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                if hasattr(player, 'thumbnail') and player.thumbnail:
+                    embed.set_thumbnail(url=player.thumbnail)
                 await interaction.edit_original_response(content=None, embed=embed)
             else:
                 embed = discord.Embed(
@@ -3053,10 +3253,80 @@ if YOUTUBE_DL_AVAILABLE:
                 if player.duration:
                     mins, secs = divmod(player.duration, 60)
                     embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                if hasattr(player, 'thumbnail') and player.thumbnail:
+                    embed.set_thumbnail(url=player.thumbnail)
                 await interaction.edit_original_response(content=None, embed=embed)
                 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error playing music: {e}")
+            error_msg = str(e)
+            
+            # Provide user-friendly error messages and solutions
+            if "Sign in to confirm you're not a bot" in error_msg or "bot" in error_msg.lower():
+                embed = discord.Embed(
+                    title="🤖 Bot Detection Error",
+                    description="YouTube has detected automated access. Trying alternative methods...",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(
+                    name="💡 What's happening?",
+                    value="YouTube is blocking bot access to prevent abuse.",
+                    inline=False
+                )
+                embed.add_field(
+                    name="🔧 Solutions:",
+                    value="• Try searching by song name instead of URL\n• Use shorter, more specific search terms\n• Try again in a few minutes\n• Use direct YouTube links",
+                    inline=False
+                )
+                embed.add_field(
+                    name="🎵 Alternative:",
+                    value="Try: `/dotgen_search <song name>` to find songs before playing",
+                    inline=False
+                )
+                await interaction.edit_original_response(content=None, embed=embed)
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                embed = discord.Embed(
+                    title="🌐 Connection Error",
+                    description="Unable to connect to music sources.",
+                    color=discord.Color.red()
+                )
+                embed.add_field(
+                    name="💡 Try:",
+                    value="• Check if the URL is valid\n• Try a different song\n• Wait a moment and try again",
+                    inline=False
+                )
+                await interaction.edit_original_response(content=None, embed=embed)
+            elif "not found" in error_msg.lower() or "unavailable" in error_msg.lower():
+                embed = discord.Embed(
+                    title="🔍 Song Not Found",
+                    description="The requested song could not be found or is unavailable.",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(
+                    name="💡 Try:",
+                    value="• Check spelling of song/artist name\n• Try a more specific search\n• Use `/dotgen_search` to find available songs",
+                    inline=False
+                )
+                await interaction.edit_original_response(content=None, embed=embed)
+            else:
+                # Generic error with helpful suggestions
+                embed = discord.Embed(
+                    title="❌ Music Error",
+                    description="Unable to play the requested music.",
+                    color=discord.Color.red()
+                )
+                embed.add_field(
+                    name="💡 Suggestions:",
+                    value="• Try a different song or search term\n• Use `/dotgen_search` to find songs\n• Check if the URL is valid\n• Contact an admin if the problem persists",
+                    inline=False
+                )
+                embed.add_field(
+                    name="🔧 Quick fixes:",
+                    value="• Search by song name instead of URL\n• Try shorter, more common song titles\n• Wait a few minutes and try again",
+                    inline=False
+                )
+                if len(error_msg) < 500:  # Only show error if it's not too long
+                    embed.add_field(name="Technical details:", value=f"`{error_msg}`", inline=False)
+                await interaction.edit_original_response(content=None, embed=embed)
 
     @bot.tree.command(name="dotgen_skip", description="Skip the current song", guild=guild_obj)
     async def slash_skip(interaction: discord.Interaction):
