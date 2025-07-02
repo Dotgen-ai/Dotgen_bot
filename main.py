@@ -619,10 +619,14 @@ if YOUTUBE_DL_AVAILABLE:
             if ctx.guild.voice_client.channel == channel:
                 return ctx.guild.voice_client
             else:
-                await ctx.guild.voice_client.move_to(channel)
-                return ctx.guild.voice_client
+                try:
+                    await ctx.guild.voice_client.move_to(channel)
+                    return ctx.guild.voice_client
+                except Exception as e:
+                    await ctx.send(f"❌ Failed to move to voice channel: {e}")
+                    return None
         
-        # Connect to voice channel
+        # Connect to voice channel with retry
         try:
             voice_client = await channel.connect()
             voice_clients[ctx.guild.id] = voice_client
@@ -641,12 +645,18 @@ if YOUTUBE_DL_AVAILABLE:
 
         if next_song:
             try:
+                if voice_client.is_playing():
+                    voice_client.stop()
                 voice_client.play(next_song, after=lambda e: asyncio.run_coroutine_threadsafe(
                     play_next_song(guild_id, voice_client), bot.loop
                 ))
                 voice_client.source.volume = queue.volume
             except Exception as e:
                 print(f"Error playing song: {e}")
+                # Notify in voice log channel if available
+                log_channel = bot.get_channel(VOICE_LOG_CHANNEL_ID) if VOICE_LOG_CHANNEL_ID else None
+                if log_channel:
+                    await log_channel.send(f"❌ Error playing song in guild {guild_id}: {e}")
         else:
             # Queue is empty, disconnect after 5 minutes of inactivity
             await asyncio.sleep(300)
@@ -2783,6 +2793,7 @@ if FLASK_AVAILABLE:
                 "timestamp": datetime.now().isoformat(),
                 "service": "DOTGEN.AI Bot"
             }), 500
+
 
     def run_webserver():
         """Run the Flask webserver in a separate thread"""
