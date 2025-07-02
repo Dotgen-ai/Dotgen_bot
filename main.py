@@ -341,8 +341,11 @@ if YOUTUBE_DL_AVAILABLE:
                 raise Exception(f"❌ Unable to play this content. Reason: {error_context}")
             
             if 'entries' in data:
-                # Take first result if it's a search
-                data = data['entries'][0]
+                # Take first result if it's a search and entries is not empty
+                if data['entries']:
+                    data = data['entries'][0]
+                else:
+                    raise Exception("❌ No entries found in search results")
 
             data['requester'] = requester
             filename = data['url'] if stream else ytdl.prepare_filename(data)
@@ -3711,9 +3714,15 @@ if YOUTUBE_DL_AVAILABLE:
         await interaction.response.defer()
         
         try:
+            # Sanitize query to prevent malformed input
+            sanitized_query = query.strip()
+            if not sanitized_query:
+                await interaction.followup.send("❌ Please provide a valid search query.", ephemeral=True)
+                return
+            
             # Search for multiple results
             loop = asyncio.get_event_loop()
-            search_query = f"ytsearch5:{query}"  # Search for 5 results
+            search_query = f"ytsearch5:{sanitized_query}"  # Search for 5 results
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
             
             if not data or 'entries' not in data or not data['entries']:
@@ -3722,7 +3731,7 @@ if YOUTUBE_DL_AVAILABLE:
             
             embed = discord.Embed(
                 title="🔍 Search Results",
-                description=f"Search results for: **{query}**",
+                description=f"Search results for: **{sanitized_query}**",
                 color=discord.Color.blue()
             )
             
