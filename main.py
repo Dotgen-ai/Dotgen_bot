@@ -6,6 +6,7 @@ import random
 import os
 import re
 import sys
+import time
 from dotenv import load_dotenv
 import threading
 from datetime import datetime
@@ -114,7 +115,8 @@ temp_voice_channels = {}
 role_voice_channels = {}  # Track voice channels by role
 
 # Music functionality variables
-music_queues = {}  # Store music queues per guild
+music_players = {}  # Store Player instances per guild
+music_queues = {}  # Store music queues per guild (legacy compatibility)
 voice_clients = {}  # Store voice clients per guild
 
 # YouTube DL options for music (ENHANCED FOR MAXIMUM BOT DETECTION EVASION - 2024)
@@ -257,6 +259,101 @@ if YOUTUBE_DL_AVAILABLE:
     }
     ytdl_minimal = youtube_dl.YoutubeDL(ytdl_minimal_options)
 
+    class Track:
+        """Enhanced Track class with rich metadata and formatting"""
+        def __init__(self, data, requester=None, source=None):
+            self.data = data
+            self.title = data.get('title', 'Unknown Title')
+            self.url = data.get('url', '')
+            self.duration = data.get('duration', 0)
+            self.requester = requester
+            self.webpage_url = data.get('webpage_url', '')
+            self.thumbnail = data.get('thumbnail', '')
+            self.uploader = data.get('uploader', 'Unknown')
+            self.view_count = data.get('view_count', 0)
+            self.like_count = data.get('like_count', 0)
+            self.upload_date = data.get('upload_date', '')
+            self.description = data.get('description', '')
+            self.source = source  # The actual audio source
+            self.position = 0  # Current playback position in seconds
+            self.created_at = datetime.now()
+            
+        @property
+        def formatted_length(self):
+            """Return formatted duration string (e.g., '3:45', '1:23:45')"""
+            if not self.duration:
+                return "Unknown"
+            
+            hours = self.duration // 3600
+            minutes = (self.duration % 3600) // 60
+            seconds = self.duration % 60
+            
+            if hours > 0:
+                return f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{minutes}:{seconds:02d}"
+        
+        @property
+        def formatted_position(self):
+            """Return formatted current position string"""
+            if not self.position:
+                return "0:00"
+            
+            hours = self.position // 3600
+            minutes = (self.position % 3600) // 60
+            seconds = self.position % 60
+            
+            if hours > 0:
+                return f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{minutes}:{seconds:02d}"
+        
+        @property
+        def progress_bar(self):
+            """Return a visual progress bar"""
+            if not self.duration or self.duration == 0:
+                return "▬▬▬▬▬▬▬▬▬▬ 0%"
+            
+            progress = min(self.position / self.duration, 1.0)
+            filled_length = int(progress * 10)
+            bar = "█" * filled_length + "▬" * (10 - filled_length)
+            percentage = int(progress * 100)
+            return f"{bar} {percentage}%"
+        
+        @property
+        def embed_info(self):
+            """Return discord embed with track information"""
+            embed = discord.Embed(
+                title=self.title,
+                url=self.webpage_url,
+                color=discord.Color.blue()
+            )
+            
+            embed.add_field(name="Duration", value=self.formatted_length, inline=True)
+            embed.add_field(name="Requested by", value=self.requester.mention if self.requester else "Unknown", inline=True)
+            
+            if self.uploader != "Unknown":
+                embed.add_field(name="Uploader", value=self.uploader, inline=True)
+            
+            if self.view_count > 0:
+                embed.add_field(name="Views", value=f"{self.view_count:,}", inline=True)
+            
+            if self.thumbnail:
+                embed.set_thumbnail(url=self.thumbnail)
+            
+            return embed
+        
+        @property
+        def queue_info(self):
+            """Return formatted string for queue display"""
+            return f"**{self.title}** ({self.formatted_length}) - {self.requester.mention if self.requester else 'Unknown'}"
+        
+        def __str__(self):
+            return f"{self.title} - {self.formatted_length}"
+        
+        def __repr__(self):
+            return f"<Track title='{self.title}' duration={self.duration} requester={self.requester}>"
+
     class YTDLSource(discord.PCMVolumeTransformer):
         def __init__(self, source, *, data, volume=0.5):
             super().__init__(source, volume)
@@ -313,7 +410,7 @@ if YOUTUBE_DL_AVAILABLE:
                     elif "Video unavailable" in error_msg:
                         print("📵 Video unavailable, trying alternative method...")
                     elif "Private video" in error_msg:
-                        print("� Private video detected, trying alternative method...")
+                        print("🔒 Private video detected, trying alternative method...")
                     elif "region" in error_msg.lower():
                         print("🌍 Region-blocked content, trying geo-bypass...")
                     elif "rate limit" in error_msg.lower():
@@ -352,14 +449,66 @@ if YOUTUBE_DL_AVAILABLE:
             
             # Try enhanced FFmpeg options first, fallback to basic if needed
             try:
-                return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+                source = discord.FFmpegPCMAudio(filename, **ffmpeg_options)
+                return cls(source, data=data)
             except Exception as ffmpeg_error:
                 print(f"⚠️  Enhanced FFmpeg failed, using basic options: {ffmpeg_error}")
                 basic_ffmpeg = {
                     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
                     'options': '-vn'
                 }
-                return cls(discord.FFmpegPCMAudio(filename, **basic_ffmpeg), data=data)
+                source = discord.FFmpegPCMAudio(filename, **basic_ffmpeg)
+                return cls(source, data=data)
+        
+        @classmethod
+        async def create_track(cls, url, *, loop=None, requester=None):
+            """Create a Track object from URL"""
+            loop = loop or asyncio.get_event_loop()
+            
+            # Use same extraction logic as from_url
+            extraction_methods = [
+                ("Main extractor (web + mobile)", ytdl),
+                ("Mobile-first extractor", ytdl_mobile),
+                ("Web-only extractor", ytdl_web),
+                ("Minimal extractor (fallback)", ytdl_minimal)
+            ]
+            
+            data = None
+            last_error = None
+            
+            for attempt, (method_name, ytdl_instance) in enumerate(extraction_methods, 1):
+                try:
+                    print(f"🎵 Extracting metadata using {method_name} (method {attempt}/{len(extraction_methods)})...")
+                    
+                    if attempt > 1:
+                        delay = random.uniform(1, 3)
+                        await asyncio.sleep(delay)
+                    
+                    if hasattr(ytdl_instance, 'params') and 'http_headers' in ytdl_instance.params:
+                        ytdl_instance.params['http_headers']['User-Agent'] = get_user_agent()
+                    
+                    data = await loop.run_in_executor(None, lambda: ytdl_instance.extract_info(url, download=False))
+                    
+                    if data:
+                        print(f"✅ Successfully extracted metadata using {method_name}")
+                        break
+                        
+                except Exception as e:
+                    last_error = e
+                    continue
+            
+            if not data:
+                raise Exception(f"❌ Unable to extract track information")
+            
+            if 'entries' in data:
+                if data['entries']:
+                    data = data['entries'][0]
+                else:
+                    raise Exception("❌ No entries found in search results")
+            
+            # Create Track object
+            track = Track(data, requester=requester)
+            return track
 
 # Welcome messages templates
 WELCOME_MESSAGES = [
@@ -487,8 +636,355 @@ async def create_welcome_image(member):
 # =============================================================================
 
 if YOUTUBE_DL_AVAILABLE:
+    class Player:
+        """Advanced music player with robust queue management and controls"""
+        def __init__(self, voice_client):
+            self.voice_client = voice_client
+            self.queue = []
+            self.history = []
+            self.current_track = None
+            self.loop_mode = "none"  # none, track, queue
+            self.shuffle_mode = False
+            self.auto_play = False
+            self.volume = 0.5
+            self.paused = False
+            self.max_history = 50
+            self.max_queue = 1000
+            self.skip_votes = set()
+            self.skip_threshold = 0.5  # 50% of listeners needed to skip
+            self.position = 0  # Current position in seconds
+            self.start_time = None
+            self.pause_time = None
+            self.total_pause_duration = 0
+            
+        def add_track(self, track):
+            """Add a track to the queue"""
+            if len(self.queue) >= self.max_queue:
+                raise Exception(f"Queue is full! Maximum {self.max_queue} tracks allowed.")
+            
+            self.queue.append(track)
+            
+            if self.shuffle_mode:
+                self.shuffle_queue()
+            
+            return len(self.queue)
+        
+        def add_tracks(self, tracks):
+            """Add multiple tracks to the queue"""
+            added = 0
+            for track in tracks:
+                if len(self.queue) >= self.max_queue:
+                    break
+                self.queue.append(track)
+                added += 1
+            
+            if self.shuffle_mode:
+                self.shuffle_queue()
+            
+            return added
+        
+        def get_next_track(self):
+            """Get the next track to play based on loop and shuffle settings"""
+            if self.loop_mode == "track" and self.current_track:
+                return self.current_track
+            
+            if not self.queue:
+                if self.loop_mode == "queue" and self.history:
+                    # Restore queue from history
+                    self.queue = self.history.copy()
+                    self.history.clear()
+                    if self.shuffle_mode:
+                        self.shuffle_queue()
+                else:
+                    return None
+            
+            if self.shuffle_mode and len(self.queue) > 1:
+                # Get random track
+                import random
+                index = random.randint(0, len(self.queue) - 1)
+                track = self.queue.pop(index)
+            else:
+                track = self.queue.pop(0)
+            
+            # Add current track to history
+            if self.current_track:
+                self.add_to_history(self.current_track)
+            
+            self.current_track = track
+            return track
+        
+        def skip_track(self):
+            """Skip the current track"""
+            if self.current_track:
+                self.add_to_history(self.current_track)
+            
+            next_track = self.get_next_track()
+            if next_track:
+                self.current_track = next_track
+            else:
+                self.current_track = None
+            
+            self.skip_votes.clear()
+            return self.current_track
+        
+        def previous_track(self):
+            """Go back to the previous track"""
+            if not self.history:
+                return None
+            
+            # Put current track back in queue
+            if self.current_track:
+                self.queue.insert(0, self.current_track)
+            
+            # Get previous track
+            self.current_track = self.history.pop()
+            return self.current_track
+        
+        def remove_track(self, index):
+            """Remove a track from the queue by index"""
+            if 0 <= index < len(self.queue):
+                return self.queue.pop(index)
+            return None
+        
+        def move_track(self, from_index, to_index):
+            """Move a track within the queue"""
+            if 0 <= from_index < len(self.queue) and 0 <= to_index < len(self.queue):
+                track = self.queue.pop(from_index)
+                self.queue.insert(to_index, track)
+                return True
+            return False
+        
+        def swap_tracks(self, index1, index2):
+            """Swap two tracks in the queue"""
+            if 0 <= index1 < len(self.queue) and 0 <= index2 < len(self.queue):
+                self.queue[index1], self.queue[index2] = self.queue[index2], self.queue[index1]
+                return True
+            return False
+        
+        def shuffle_queue(self):
+            """Shuffle the current queue"""
+            import random
+            random.shuffle(self.queue)
+            self.shuffle_mode = True
+        
+        def clear_queue(self):
+            """Clear the queue"""
+            self.queue.clear()
+        
+        def clear_history(self):
+            """Clear the history"""
+            self.history.clear()
+        
+        def add_to_history(self, track):
+            """Add a track to history"""
+            self.history.append(track)
+            if len(self.history) > self.max_history:
+                self.history.pop(0)
+        
+        def set_loop_mode(self, mode):
+            """Set loop mode: none, track, or queue"""
+            valid_modes = ["none", "track", "queue"]
+            if mode.lower() in valid_modes:
+                self.loop_mode = mode.lower()
+                return True
+            return False
+        
+        def toggle_shuffle(self):
+            """Toggle shuffle mode"""
+            self.shuffle_mode = not self.shuffle_mode
+            if self.shuffle_mode:
+                self.shuffle_queue()
+            return self.shuffle_mode
+        
+        def set_volume(self, volume):
+            """Set player volume (0.0 to 1.0)"""
+            self.volume = max(0.0, min(1.0, volume))
+            if self.voice_client and self.voice_client.source:
+                self.voice_client.source.volume = self.volume
+        
+        def add_skip_vote(self, user_id):
+            """Add a skip vote"""
+            self.skip_votes.add(user_id)
+            return len(self.skip_votes)
+        
+        def get_skip_votes_needed(self):
+            """Get number of skip votes needed"""
+            if not self.voice_client or not self.voice_client.channel:
+                return 1
+            
+            # Count non-bot members in voice channel
+            listeners = sum(1 for member in self.voice_client.channel.members if not member.bot)
+            return max(1, int(listeners * self.skip_threshold))
+        
+        def can_skip(self):
+            """Check if enough votes to skip"""
+            return len(self.skip_votes) >= self.get_skip_votes_needed()
+        
+        def get_queue_info(self):
+            """Get comprehensive queue information"""
+            total_duration = sum(track.duration for track in self.queue if track.duration)
+            
+            return {
+                'queue_length': len(self.queue),
+                'total_duration': total_duration,
+                'current_track': self.current_track,
+                'loop_mode': self.loop_mode,
+                'shuffle_mode': self.shuffle_mode,
+                'volume': int(self.volume * 100),
+                'paused': self.paused,
+                'position': self.position,
+                'history_length': len(self.history),
+                'skip_votes': len(self.skip_votes),
+                'skip_votes_needed': self.get_skip_votes_needed()
+            }
+        
+        def get_queue_embed(self, page=1, per_page=10):
+            """Get a formatted embed showing the queue"""
+            embed = discord.Embed(
+                title="🎵 Music Queue",
+                color=discord.Color.blue()
+            )
+            
+            # Current track
+            if self.current_track:
+                current_info = f"**{self.current_track.title}**\n"
+                current_info += f"Duration: {self.current_track.formatted_length}\n"
+                current_info += f"Requested by: {self.current_track.requester.mention if self.current_track.requester else 'Unknown'}\n"
+                if self.current_track.position > 0:
+                    current_info += f"Progress: {self.current_track.progress_bar}\n"
+                    current_info += f"Position: {self.current_track.formatted_position} / {self.current_track.formatted_length}"
+                
+                embed.add_field(
+                    name="🎵 Now Playing",
+                    value=current_info,
+                    inline=False
+                )
+            
+            # Queue
+            if self.queue:
+                start_index = (page - 1) * per_page
+                end_index = start_index + per_page
+                page_tracks = self.queue[start_index:end_index]
+                
+                queue_text = ""
+                for i, track in enumerate(page_tracks, start=start_index + 1):
+                    queue_text += f"{i}. {track.queue_info}\n"
+                
+                embed.add_field(
+                    name=f"📝 Queue ({len(self.queue)} tracks)",
+                    value=queue_text if queue_text else "No tracks in queue",
+                    inline=False
+                )
+                
+                # Add pagination info
+                total_pages = (len(self.queue) + per_page - 1) // per_page
+                if total_pages > 1:
+                    embed.set_footer(text=f"Page {page}/{total_pages}")
+            
+            # Player info
+            info_text = f"Loop: {self.loop_mode.title()}\n"
+            info_text += f"Shuffle: {'On' if self.shuffle_mode else 'Off'}\n"
+            info_text += f"Volume: {int(self.volume * 100)}%\n"
+            info_text += f"Auto-play: {'On' if self.auto_play else 'Off'}"
+            
+            embed.add_field(
+                name="⚙️ Player Settings",
+                value=info_text,
+                inline=True
+            )
+            
+            # Stats
+            total_duration = sum(track.duration for track in self.queue if track.duration)
+            hours = total_duration // 3600
+            minutes = (total_duration % 3600) // 60
+            
+            stats_text = f"Tracks: {len(self.queue)}\n"
+            stats_text += f"Total time: {hours}h {minutes}m\n"
+            stats_text += f"History: {len(self.history)} tracks"
+            
+            embed.add_field(
+                name="📊 Statistics",
+                value=stats_text,
+                inline=True
+            )
+            
+            return embed
+        
+        def get_now_playing_embed(self):
+            """Get embed showing current track"""
+            if not self.current_track:
+                embed = discord.Embed(
+                    title="🎵 Now Playing",
+                    description="Nothing is currently playing",
+                    color=discord.Color.orange()
+                )
+                return embed
+            
+            embed = self.current_track.embed_info
+            embed.title = "🎵 Now Playing"
+            embed.color = discord.Color.green()
+            
+            # Add player controls info
+            controls_text = f"Loop: {self.loop_mode.title()}\n"
+            controls_text += f"Shuffle: {'On' if self.shuffle_mode else 'Off'}\n"
+            controls_text += f"Volume: {int(self.volume * 100)}%"
+            
+            embed.add_field(
+                name="⚙️ Controls",
+                value=controls_text,
+                inline=True
+            )
+            
+            # Add queue info
+            queue_info = f"Queue: {len(self.queue)} tracks\n"
+            if self.queue:
+                queue_info += f"Next: {self.queue[0].title[:30]}..."
+            
+            embed.add_field(
+                name="📝 Queue",
+                value=queue_info,
+                inline=True
+            )
+            
+            # Add progress bar if position is available
+            if self.current_track.position > 0:
+                embed.add_field(
+                    name="⏳ Progress",
+                    value=f"{self.current_track.formatted_position} / {self.current_track.formatted_length}\n{self.current_track.progress_bar}",
+                    inline=False
+                )
+            
+            return embed
+        
+        def update_position(self):
+            """Update current track position"""
+            if self.current_track and self.start_time and not self.paused:
+                elapsed = time.time() - self.start_time - self.total_pause_duration
+                self.current_track.position = max(0, int(elapsed))
+        
+        def pause(self):
+            """Pause playback"""
+            self.paused = True
+            self.pause_time = time.time()
+        
+        def resume(self):
+            """Resume playback"""
+            if self.paused and self.pause_time:
+                self.total_pause_duration += time.time() - self.pause_time
+                self.pause_time = None
+            self.paused = False
+        
+        def reset_position(self):
+            """Reset position tracking"""
+            self.position = 0
+            self.start_time = time.time()
+            self.pause_time = None
+            self.total_pause_duration = 0
+            if self.current_track:
+                self.current_track.position = 0
+
     class MusicQueue:
-        """Advanced music queue for a guild with enhanced features"""
+        """Legacy compatibility class - use Player instead"""
         def __init__(self):
             self.queue = []
             self.current = None
@@ -639,21 +1135,41 @@ if YOUTUBE_DL_AVAILABLE:
             return None
 
     async def play_next_song(guild_id, voice_client):
-        """Play the next song in the queue"""
-        if guild_id not in music_queues:
+        """Play the next song using the new Player system"""
+        if guild_id not in music_players:
             return
 
-        queue = music_queues[guild_id]
-        next_song = queue.get_next()
+        player = music_players[guild_id]
+        next_track = player.get_next_track()
 
-        if next_song:
+        if next_track:
             try:
                 if voice_client.is_playing():
                     voice_client.stop()
-                voice_client.play(next_song, after=lambda e: asyncio.run_coroutine_threadsafe(
-                    play_next_song(guild_id, voice_client), bot.loop
-                ))
-                voice_client.source.volume = queue.volume
+                
+                # Create audio source from track
+                try:
+                    source = await YTDLSource.from_url(next_track.data['url'], loop=bot.loop, stream=True, requester=next_track.requester)
+                    next_track.source = source
+                    
+                    # Set volume
+                    source.volume = player.volume
+                    
+                    # Reset position tracking
+                    player.reset_position()
+                    
+                    voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
+                        play_next_song(guild_id, voice_client), bot.loop
+                    ))
+                    
+                    print(f"🎵 Now playing: {next_track.title}")
+                    
+                except Exception as e:
+                    print(f"Error creating audio source: {e}")
+                    # Skip to next track on error
+                    await asyncio.sleep(1)
+                    await play_next_song(guild_id, voice_client)
+                    
             except Exception as e:
                 print(f"Error playing song: {e}")
                 # Notify in voice log channel if available
@@ -667,6 +1183,8 @@ if YOUTUBE_DL_AVAILABLE:
                 await voice_client.disconnect()
                 if guild_id in voice_clients:
                     del voice_clients[guild_id]
+                if guild_id in music_players:
+                    del music_players[guild_id]
 
     async def search_youtube(query):
         """Search YouTube for a song"""
@@ -1172,7 +1690,7 @@ async def handle_voice_channel_cleanup(channel):
 
 @bot.event
 async def on_member_update(before, after):
-    """Log role changes and other member updates"""
+    """Log role changes and other member updates with WHO made the changes"""
     if not ROLE_LOG_CHANNEL_ID:
         return
         
@@ -1184,6 +1702,21 @@ async def on_member_update(before, after):
         if roles_added or roles_removed:
             log_channel = bot.get_channel(ROLE_LOG_CHANNEL_ID)
             if log_channel:
+                # Try to find WHO made the role changes using audit logs
+                moderator = None
+                try:
+                    # Get recent audit log entries for member role updates
+                    async for entry in after.guild.audit_logs(
+                        action=discord.AuditLogAction.member_role_update,
+                        limit=10,
+                        after=discord.utils.utcnow() - discord.timedelta(seconds=30)
+                    ):
+                        if entry.target.id == after.id:
+                            moderator = entry.user
+                            break
+                except Exception as e:
+                    print(f"Could not fetch audit logs: {e}")
+                
                 embed = discord.Embed(
                     title="🎭 Role Changes",
                     color=discord.Color.orange()
@@ -1194,6 +1727,19 @@ async def on_member_update(before, after):
                     value=f"{after.mention} ({after.display_name})",
                     inline=False
                 )
+                
+                if moderator:
+                    embed.add_field(
+                        name="👨‍💼 Changed By",
+                        value=f"{moderator.mention} ({moderator.display_name})",
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="👨‍💼 Changed By",
+                        value="Unknown (could not determine from audit logs)",
+                        inline=False
+                    )
                 
                 if roles_added:
                     embed.add_field(
@@ -1218,6 +1764,67 @@ async def on_member_update(before, after):
         # Check for nickname changes
         if before.display_name != after.display_name:
             log_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID) if MODERATION_LOG_CHANNEL_ID else bot.get_channel(ROLE_LOG_CHANNEL_ID)
+            if log_channel:
+                # Try to find WHO made the nickname change
+                moderator = None
+                try:
+                    async for entry in after.guild.audit_logs(
+                        action=discord.AuditLogAction.member_update,
+                        limit=5,
+                        after=discord.utils.utcnow() - discord.timedelta(seconds=30)
+                    ):
+                        if entry.target.id == after.id:
+                            moderator = entry.user
+                            break
+                except:
+                    pass
+                
+                embed = discord.Embed(
+                    title="📝 Nickname Changed",
+                    color=discord.Color.blue()
+                )
+                
+                embed.add_field(
+                    name="👤 Member",
+                    value=f"{after.mention} ({after.id})",
+                    inline=False
+                )
+                
+                if moderator and moderator.id != after.id:
+                    embed.add_field(
+                        name="👨‍💼 Changed By",
+                        value=f"{moderator.mention} ({moderator.display_name})",
+                        inline=False
+                    )
+                elif moderator and moderator.id == after.id:
+                    embed.add_field(
+                        name="👨‍💼 Changed By",
+                        value="Self (user changed their own nickname)",
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="👨‍💼 Changed By",
+                        value="Unknown",
+                        inline=False
+                    )
+                
+                embed.add_field(
+                    name="📝 Before",
+                    value=before.display_name,
+                    inline=True
+                )
+                
+                embed.add_field(
+                    name="📝 After",
+                    value=after.display_name,
+                    inline=True
+                )
+                
+                embed.set_thumbnail(url=after.avatar.url if after.avatar else after.default_avatar.url)
+                embed.timestamp = discord.utils.utcnow()
+                
+                await log_channel.send(embed=embed)
             if log_channel:
                 embed = discord.Embed(
                     title="📝 Nickname Changed",
@@ -2370,7 +2977,7 @@ async def echo(ctx, *, message):
 if YOUTUBE_DL_AVAILABLE:
     @bot.command(name="play", aliases=["p"])
     async def play_music(ctx, *, query):
-        """Play music from YouTube (Legacy command - use /dotgen_play instead)"""
+        """Play music from YouTube using enhanced Player system"""
         # Check if user is in a voice channel
         if not ctx.author.voice:
             await ctx.send("❌ You need to be in a voice channel to play music!")
@@ -2381,46 +2988,42 @@ if YOUTUBE_DL_AVAILABLE:
         if not voice_client:
             return
 
-        # Initialize music queue for guild if needed
-        if ctx.guild.id not in music_queues:
-            music_queues[ctx.guild.id] = MusicQueue()
+        # Initialize player for guild if needed
+        if ctx.guild.id not in music_players:
+            music_players[ctx.guild.id] = Player(voice_client)
 
-        queue = music_queues[ctx.guild.id]
+        player = music_players[ctx.guild.id]
 
         try:
             # Search for the song
             search_msg = await ctx.send(f"🔍 Searching for: **{query}**...")
             
-            # Create the audio source
-            player = await YTDLSource.from_url(query, loop=bot.loop, stream=True, requester=ctx.author)
+            # Create track object with metadata
+            track = await YTDLSource.create_track(query, loop=bot.loop, requester=ctx.author)
             
-            # Add to queue
-            queue.add_song(player)
+            # Add to player queue
+            position = player.add_track(track)
             
             # If nothing is currently playing, start playing
             if not voice_client.is_playing():
                 await play_next_song(ctx.guild.id, voice_client)
-                embed = discord.Embed(
-                    title="🎵 Now Playing",
-                    description=f"**{player.title}**",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Requested by", value=ctx.author.mention, inline=True)
-                if player.duration:
-                    mins, secs = divmod(player.duration, 60)
-                    embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                embed = track.embed_info
+                embed.title = "🎵 Now Playing"
+                embed.color = discord.Color.green()
                 await search_msg.edit(content=None, embed=embed)
             else:
                 embed = discord.Embed(
                     title="📝 Added to Queue",
-                    description=f"**{player.title}**",
+                    description=f"**{track.title}**",
                     color=discord.Color.blue()
                 )
+                embed.add_field(name="Duration", value=track.formatted_length, inline=True)
                 embed.add_field(name="Requested by", value=ctx.author.mention, inline=True)
-                embed.add_field(name="Position in queue", value=str(len(queue.queue)), inline=True)
-                if player.duration:
-                    mins, secs = divmod(player.duration, 60)
-                    embed.add_field(name="Duration", value=f"{mins}:{secs:02d}", inline=True)
+                embed.add_field(name="Position in queue", value=str(position), inline=True)
+                
+                if track.thumbnail:
+                    embed.set_thumbnail(url=track.thumbnail)
+                
                 await search_msg.edit(content=None, embed=embed)
                 
         except Exception as e:
@@ -2444,7 +3047,7 @@ if YOUTUBE_DL_AVAILABLE:
 
     @bot.command(name="skip", aliases=["s"])
     async def skip_music(ctx):
-        """Skip the current song"""
+        """Skip the current song with vote system"""
         if not ctx.author.voice:
             await ctx.send("❌ You need to be in a voice channel to use music commands!")
             return
@@ -2454,11 +3057,34 @@ if YOUTUBE_DL_AVAILABLE:
             await ctx.send("❌ I'm not playing any music!")
             return
 
-        if voice_client.is_playing():
-            voice_client.stop()
-            await ctx.send("⏭️ Song skipped!")
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        # Check if user has permission to skip without votes
+        if ctx.author.guild_permissions.manage_channels or ctx.author == player.current_track.requester:
+            # Skip immediately
+            if voice_client.is_playing():
+                voice_client.stop()
+                await ctx.send("⏭️ Song skipped!")
+            else:
+                await ctx.send("❌ No music is currently playing!")
         else:
-            await ctx.send("❌ No music is currently playing!")
+            # Add vote to skip
+            votes = player.add_skip_vote(ctx.author.id)
+            votes_needed = player.get_skip_votes_needed()
+            
+            if player.can_skip():
+                # Enough votes to skip
+                if voice_client.is_playing():
+                    voice_client.stop()
+                    await ctx.send("⏭️ Song skipped by vote!")
+                else:
+                    await ctx.send("❌ No music is currently playing!")
+            else:
+                await ctx.send(f"🗳️ Skip vote added! ({votes}/{votes_needed} votes needed)")
 
     @bot.command(name="stop")
     async def stop_music(ctx):
@@ -2472,9 +3098,9 @@ if YOUTUBE_DL_AVAILABLE:
             await ctx.send("❌ I'm not connected to any voice channel!")
             return
 
-        # Clear queue and stop music
-        if ctx.guild.id in music_queues:
-            music_queues[ctx.guild.id].clear()
+        # Clear player and stop music
+        if ctx.guild.id in music_players:
+            music_players[ctx.guild.id].clear_queue()
 
         if voice_client.is_playing():
             voice_client.stop()
@@ -2482,46 +3108,218 @@ if YOUTUBE_DL_AVAILABLE:
         await ctx.send("⏹️ Music stopped and queue cleared!")
 
     @bot.command(name="queue", aliases=["q"])
-    async def show_queue(ctx):
-        """Show the music queue"""
-        if ctx.guild.id not in music_queues:
-            await ctx.send("❌ No music queue found!")
+    async def show_queue(ctx, page: int = 1):
+        """Show the music queue with pagination"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
             return
 
-        queue = music_queues[ctx.guild.id]
+        player = music_players[ctx.guild.id]
+        embed = player.get_queue_embed(page=page, per_page=10)
+        await ctx.send(embed=embed)
+
+    @bot.command(name="nowplaying", aliases=["np", "current"])
+    async def now_playing(ctx):
+        """Show information about the currently playing track"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        player.update_position()  # Update current position
+        embed = player.get_now_playing_embed()
+        await ctx.send(embed=embed)
+
+    @bot.command(name="loop", aliases=["repeat"])
+    async def loop_command(ctx, mode: str = None):
+        """Set loop mode: none, track, or queue"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        if mode is None:
+            # Show current loop mode
+            embed = discord.Embed(
+                title="🔁 Loop Mode",
+                description=f"Current mode: **{player.loop_mode.title()}**",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="Available modes",
+                value="• `none` - No looping\n• `track` - Loop current track\n• `queue` - Loop entire queue",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+        else:
+            if player.set_loop_mode(mode):
+                await ctx.send(f"🔁 Loop mode set to: **{mode.title()}**")
+            else:
+                await ctx.send("❌ Invalid loop mode! Use: `none`, `track`, or `queue`")
+
+    @bot.command(name="shuffle")
+    async def shuffle_command(ctx):
+        """Toggle shuffle mode"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        shuffle_state = player.toggle_shuffle()
+        
+        if shuffle_state:
+            await ctx.send("🔀 Shuffle mode **enabled**")
+        else:
+            await ctx.send("🔀 Shuffle mode **disabled**")
+
+    @bot.command(name="volume", aliases=["vol"])
+    async def volume_command(ctx, volume: int = None):
+        """Set or show the player volume (0-100)"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        if volume is None:
+            # Show current volume
+            await ctx.send(f"🔊 Current volume: **{int(player.volume * 100)}%**")
+        else:
+            if 0 <= volume <= 100:
+                player.set_volume(volume / 100)
+                await ctx.send(f"🔊 Volume set to **{volume}%**")
+            else:
+                await ctx.send("❌ Volume must be between 0 and 100!")
+
+    @bot.command(name="previous", aliases=["prev", "back"])
+    async def previous_command(ctx):
+        """Play the previous track"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        voice_client = ctx.guild.voice_client
+        if not voice_client:
+            await ctx.send("❌ I'm not connected to any voice channel!")
+            return
+
+        player = music_players[ctx.guild.id]
+        previous_track = player.previous_track()
+        
+        if previous_track:
+            if voice_client.is_playing():
+                voice_client.stop()
+            await ctx.send(f"⏮️ Playing previous track: **{previous_track.title}**")
+        else:
+            await ctx.send("❌ No previous track available!")
+
+    @bot.command(name="remove", aliases=["rm"])
+    async def remove_command(ctx, index: int):
+        """Remove a track from the queue by position"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        # Convert to 0-based index
+        track_index = index - 1
+        removed_track = player.remove_track(track_index)
+        
+        if removed_track:
+            await ctx.send(f"🗑️ Removed **{removed_track.title}** from queue")
+        else:
+            await ctx.send(f"❌ No track found at position {index}")
+
+    @bot.command(name="move", aliases=["mv"])
+    async def move_command(ctx, from_pos: int, to_pos: int):
+        """Move a track in the queue"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        # Convert to 0-based indices
+        from_index = from_pos - 1
+        to_index = to_pos - 1
+        
+        if player.move_track(from_index, to_index):
+            await ctx.send(f"🔄 Moved track from position {from_pos} to {to_pos}")
+        else:
+            await ctx.send("❌ Invalid positions specified!")
+
+    @bot.command(name="swap")
+    async def swap_command(ctx, pos1: int, pos2: int):
+        """Swap two tracks in the queue"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        # Convert to 0-based indices
+        index1 = pos1 - 1
+        index2 = pos2 - 1
+        
+        if player.swap_tracks(index1, index2):
+            await ctx.send(f"🔄 Swapped tracks at positions {pos1} and {pos2}")
+        else:
+            await ctx.send("❌ Invalid positions specified!")
+
+    @bot.command(name="clear")
+    async def clear_command(ctx):
+        """Clear the music queue"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        queue_size = len(player.queue)
+        player.clear_queue()
+        
+        await ctx.send(f"🧹 Cleared {queue_size} tracks from the queue")
+
+    @bot.command(name="history", aliases=["hist"])
+    async def history_command(ctx, page: int = 1):
+        """Show the play history"""
+        if ctx.guild.id not in music_players:
+            await ctx.send("❌ No music player found!")
+            return
+
+        player = music_players[ctx.guild.id]
+        
+        if not player.history:
+            await ctx.send("📜 No play history available")
+            return
+
+        per_page = 10
+        start_index = (page - 1) * per_page
+        end_index = start_index + per_page
+        page_tracks = player.history[start_index:end_index]
         
         embed = discord.Embed(
-            title="🎵 Music Queue",
-            color=discord.Color.blue()
+            title="📜 Play History",
+            color=discord.Color.purple()
         )
-
-        if queue.current:
-            embed.add_field(
-                name="🎵 Now Playing",
-                value=f"**{queue.current.title}**\nRequested by: {queue.current.requester.mention if queue.current.requester else 'Unknown'}",
-                inline=False
-            )
-
-        if queue.queue:
-            queue_text = ""
-            for i, song in enumerate(queue.queue[:10], 1):  # Show first 10 songs
-                queue_text += f"{i}. **{song.title}** - {song.requester.mention if song.requester else 'Unknown'}\n"
-            
-            if len(queue.queue) > 10:
-                queue_text += f"\n... and {len(queue.queue) - 10} more songs"
-            
-            embed.add_field(
-                name=f"📝 Up Next ({len(queue.queue)} songs)",
-                value=queue_text,
-                inline=False
-            )
-        else:
-            if not queue.current:
-                embed.add_field(
-                    name="📝 Queue Status",
-                    value=f"Queue is empty. Use `{BOT_PREFIX}play <song>` to add songs!",
-                    inline=False
-                )
+        
+        history_text = ""
+        for i, track in enumerate(reversed(page_tracks), start=len(player.history) - start_index):
+            history_text += f"{i}. {track.queue_info}\n"
+        
+        embed.add_field(
+            name=f"Recently Played ({len(player.history)} total)",
+            value=history_text if history_text else "No history available",
+            inline=False
+        )
+        
+        # Add pagination info
+        total_pages = (len(player.history) + per_page - 1) // per_page
+        if total_pages > 1:
+            embed.set_footer(text=f"Page {page}/{total_pages}")
+        
+        await ctx.send(embed=embed)
 
         await ctx.send(embed=embed)
 
@@ -2551,6 +3349,54 @@ if YOUTUBE_DL_AVAILABLE:
 
         await ctx.send(f"🔊 Volume set to **{volume}%**")
 
+    @bot.command(name="search", aliases=["find"])
+    async def search_command(ctx, *, query):
+        """Search for tracks without adding them to queue"""
+        try:
+            search_msg = await ctx.send(f"🔍 Searching for: **{query}**...")
+            
+            # Search for tracks
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch5:{query}", download=False))
+            
+            if 'entries' in data and data['entries']:
+                embed = discord.Embed(
+                    title="🔍 Search Results",
+                    description=f"Found {len(data['entries'])} results for: **{query}**",
+                    color=discord.Color.blue()
+                )
+                
+                for i, entry in enumerate(data['entries'][:5], 1):
+                    duration = entry.get('duration', 0)
+                    if duration:
+                        mins, secs = divmod(duration, 60)
+                        duration_str = f"{mins}:{secs:02d}"
+                    else:
+                        duration_str = "Unknown"
+                    
+                    uploader = entry.get('uploader', 'Unknown')
+                    view_count = entry.get('view_count', 0)
+                    
+                    result_text = f"**Duration:** {duration_str}\n"
+                    result_text += f"**Uploader:** {uploader}\n"
+                    if view_count > 0:
+                        result_text += f"**Views:** {view_count:,}\n"
+                    result_text += f"**URL:** {entry.get('webpage_url', 'N/A')}"
+                    
+                    embed.add_field(
+                        name=f"{i}. {entry.get('title', 'Unknown Title')}",
+                        value=result_text,
+                        inline=False
+                    )
+                
+                embed.set_footer(text=f"Use {BOT_PREFIX}play <URL or title> to add a track to queue")
+                await search_msg.edit(content=None, embed=embed)
+            else:
+                await search_msg.edit(content=f"❌ No results found for: **{query}**")
+                
+        except Exception as e:
+            await search_msg.edit(content=f"❌ Search failed: {str(e)[:100]}...")
+
     @bot.command(name="disconnect", aliases=["dc", "leave"])
     async def disconnect_music(ctx):
         """Disconnect from voice channel"""
@@ -2559,9 +3405,11 @@ if YOUTUBE_DL_AVAILABLE:
             await ctx.send("❌ I'm not connected to any voice channel!")
             return
 
-        # Clear queue and disconnect
+        # Clear player and disconnect
+        if ctx.guild.id in music_players:
+            del music_players[ctx.guild.id]
+
         if ctx.guild.id in music_queues:
-            music_queues[ctx.guild.id].clear()
             del music_queues[ctx.guild.id]
 
         if ctx.guild.id in voice_clients:
