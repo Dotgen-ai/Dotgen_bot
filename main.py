@@ -3321,34 +3321,6 @@ if YOUTUBE_DL_AVAILABLE:
         
         await ctx.send(embed=embed)
 
-        await ctx.send(embed=embed)
-
-    @bot.command(name="volume", aliases=["vol"])
-    async def set_volume(ctx, volume: int):
-        """Change music volume (0-100)"""
-        if not ctx.author.voice:
-            await ctx.send("❌ You need to be in a voice channel to use music commands!")
-            return
-
-        if volume < 0 or volume > 100:
-            await ctx.send("❌ Volume must be between 0 and 100!")
-            return
-
-        voice_client = ctx.guild.voice_client
-        if not voice_client:
-            await ctx.send("❌ I'm not connected to any voice channel!")
-            return
-
-        # Update volume
-        volume_decimal = volume / 100
-        if ctx.guild.id in music_queues:
-            music_queues[ctx.guild.id].volume = volume_decimal
-
-        if voice_client.source:
-            voice_client.source.volume = volume_decimal
-
-        await ctx.send(f"🔊 Volume set to **{volume}%**")
-
     @bot.command(name="search", aliases=["find"])
     async def search_command(ctx, *, query):
         """Search for tracks without adding them to queue"""
