@@ -537,8 +537,8 @@ WELCOME_MESSAGES = [
 ]
 
 # Welcome image generation
-async def create_welcome_image(member):
-    """Create a welcome image with member's avatar and dotgen.jpg background"""
+async def create_welcome_image(member, welcome_message=None):
+    """Create a welcome image with member's avatar, dotgen.jpg background, and welcome message embedded"""
     try:
         # Create a 800x400 background image
         width, height = 800, 400
@@ -651,11 +651,13 @@ async def create_welcome_image(member):
             font_large = ImageFont.truetype("arial.ttf", 52)  # Slightly larger
             font_medium = ImageFont.truetype("arial.ttf", 36)  # Slightly larger
             font_small = ImageFont.truetype("arial.ttf", 28)   # Slightly larger
+            font_message = ImageFont.truetype("arial.ttf", 24)  # For welcome message
         except:
             # Use default font if custom font not available
             font_large = ImageFont.load_default()
             font_medium = ImageFont.load_default()
             font_small = ImageFont.load_default()
+            font_message = ImageFont.load_default()
         
         # Create text with shadow/outline for better visibility
         def draw_text_with_outline(draw, position, text, font, fill_color, outline_color):
@@ -694,6 +696,41 @@ async def create_welcome_image(member):
         server_x = (width - server_width) // 2
         draw_text_with_outline(draw, (server_x, 340), server_text, font_small, 
                              (255, 215, 0), (0, 0, 0))  # Gold color for member count
+        
+        # Add welcome message if provided (embedded in image)
+        if welcome_message:
+            # Clean the welcome message (remove mentions for image)
+            clean_message = welcome_message.replace(f"<@{member.id}>", member.display_name)
+            
+            # Wrap text to fit width
+            max_width = width - 40  # 20px padding on each side
+            words = clean_message.split()
+            lines = []
+            current_line = ""
+            
+            for word in words:
+                test_line = current_line + (" " if current_line else "") + word
+                test_bbox = draw.textbbox((0, 0), test_line, font=font_message)
+                test_width = test_bbox[2] - test_bbox[0]
+                
+                if test_width <= max_width:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        lines.append(current_line)
+                    current_line = word
+            
+            if current_line:
+                lines.append(current_line)
+            
+            # Draw the welcome message lines at the bottom
+            y_start = 370
+            for i, line in enumerate(lines[:2]):  # Limit to 2 lines
+                line_bbox = draw.textbbox((0, 0), line, font=font_message)
+                line_width = line_bbox[2] - line_bbox[0]
+                line_x = (width - line_width) // 2
+                draw_text_with_outline(draw, (line_x, y_start + (i * 25)), line, font_message, 
+                                     (255, 255, 255), (0, 0, 0))
         
         # Save to bytes
         img_bytes = io.BytesIO()
@@ -1408,40 +1445,34 @@ async def on_member_join(member):
                     welcome_channel = member.guild.text_channels[0]
         
         if welcome_channel:
-            # Create welcome image
-            welcome_image = await create_welcome_image(member)
-            
             # Select a random welcome message
             welcome_msg = random.choice(WELCOME_MESSAGES).format(member=member.mention)
             
-            # Create a welcome embed
-            embed = discord.Embed(
-                title="🎉 New Member Alert!",
-                description=welcome_msg,
-                color=discord.Color.gold()
-            )
+            # Create welcome image with embedded welcome message
+            welcome_image = await create_welcome_image(member, welcome_msg)
             
             if welcome_image:
-                embed.set_image(url="attachment://welcome.png")
+                # Send only the image with the embedded welcome message
+                await welcome_channel.send(f"🎉 **{member.mention} just joined {member.guild.name}!**", file=welcome_image)
             else:
+                # Fallback to embed if image creation fails
+                embed = discord.Embed(
+                    title="🎉 New Member Alert!",
+                    description=welcome_msg,
+                    color=discord.Color.gold()
+                )
                 embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
-            
-            embed.add_field(
-                name="Member Count", 
-                value=f"You're member #{len(member.guild.members)}!", 
-                inline=True
-            )
-            embed.add_field(
-                name="Account Created", 
-                value=discord.utils.format_dt(member.created_at, style='R'), 
-                inline=True
-            )
-            embed.set_footer(text=f"Welcome to {member.guild.name}!")
-            
-            # Send welcome message with or without image
-            if welcome_image:
-                await welcome_channel.send(file=welcome_image, embed=embed)
-            else:
+                embed.add_field(
+                    name="Member Count", 
+                    value=f"You're member #{len(member.guild.members)}!", 
+                    inline=True
+                )
+                embed.add_field(
+                    name="Account Created", 
+                    value=discord.utils.format_dt(member.created_at, style='R'), 
+                    inline=True
+                )
+                embed.set_footer(text=f"Welcome to {member.guild.name}!")
                 await welcome_channel.send(embed=embed)
         
         # Call extended member join logging
@@ -1735,159 +1766,6 @@ async def handle_voice_channel_cleanup(channel):
 # =============================================================================
 
 @bot.event
-async def on_member_update(before, after):
-    """Log role changes and other member updates with WHO made the changes"""
-    if not ROLE_LOG_CHANNEL_ID:
-        return
-        
-    try:
-        # Check for role changes
-        roles_added = [role for role in after.roles if role not in before.roles]
-        roles_removed = [role for role in before.roles if role not in after.roles]
-        
-        if roles_added or roles_removed:
-            log_channel = bot.get_channel(ROLE_LOG_CHANNEL_ID)
-            if log_channel:
-                # Try to find WHO made the role changes using audit logs
-                moderator = None
-                try:
-                    # Get recent audit log entries for member role updates
-                    async for entry in after.guild.audit_logs(
-                        action=discord.AuditLogAction.member_role_update,
-                        limit=10,
-                        after=discord.utils.utcnow() - discord.timedelta(seconds=30)
-                    ):
-                        if entry.target.id == after.id:
-                            moderator = entry.user
-                            break
-                except Exception as e:
-                    print(f"Could not fetch audit logs: {e}")
-                
-                embed = discord.Embed(
-                    title="🎭 Role Changes",
-                    color=discord.Color.orange()
-                )
-                
-                embed.add_field(
-                    name="👤 Member",
-                    value=f"{after.mention} ({after.display_name})",
-                    inline=False
-                )
-                
-                if moderator:
-                    embed.add_field(
-                        name="👨‍💼 Changed By",
-                        value=f"{moderator.mention} ({moderator.display_name})",
-                        inline=False
-                    )
-                else:
-                    embed.add_field(
-                        name="👨‍💼 Changed By",
-                        value="Unknown (could not determine from audit logs)",
-                        inline=False
-                    )
-                
-                if roles_added:
-                    embed.add_field(
-                        name="➕ Roles Added",
-                        value=", ".join([f"@{role.name}" for role in roles_added]),
-                        inline=False
-                    )
-                
-                if roles_removed:
-                    embed.add_field(
-                        name="➖ Roles Removed", 
-                        value=", ".join([f"@{role.name}" for role in roles_removed]),
-                        inline=False
-                    )
-                
-                embed.set_thumbnail(url=after.avatar.url if after.avatar else after.default_avatar.url)
-                embed.timestamp = discord.utils.utcnow()
-                embed.set_footer(text=f"User ID: {after.id}")
-                
-                await log_channel.send(embed=embed)
-                
-        # Check for nickname changes
-        if before.display_name != after.display_name:
-            log_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID) if MODERATION_LOG_CHANNEL_ID else bot.get_channel(ROLE_LOG_CHANNEL_ID)
-            if log_channel:
-                # Try to find WHO made the nickname change
-                moderator = None
-                try:
-                    async for entry in after.guild.audit_logs(
-                        action=discord.AuditLogAction.member_update,
-                        limit=5,
-                        after=discord.utils.utcnow() - discord.timedelta(seconds=30)
-                    ):
-                        if entry.target.id == after.id:
-                            moderator = entry.user
-                            break
-                except:
-                    pass
-                
-                embed = discord.Embed(
-                    title="📝 Nickname Changed",
-                    color=discord.Color.blue()
-                )
-                
-                embed.add_field(
-                    name="👤 Member",
-                    value=f"{after.mention} ({after.id})",
-                    inline=False
-                )
-                
-                if moderator and moderator.id != after.id:
-                    embed.add_field(
-                        name="👨‍💼 Changed By",
-                        value=f"{moderator.mention} ({moderator.display_name})",
-                        inline=False
-                    )
-                elif moderator and moderator.id == after.id:
-                    embed.add_field(
-                        name="👨‍💼 Changed By",
-                        value="Self (user changed their own nickname)",
-                        inline=False
-                    )
-                else:
-                    embed.add_field(
-                        name="👨‍💼 Changed By",
-                        value="Unknown",
-                        inline=False
-                    )
-                
-                embed.add_field(
-                    name="📝 Before",
-                    value=before.display_name,
-                    inline=True
-                )
-                
-                embed.add_field(
-                    name="📝 After",
-                    value=after.display_name,
-                    inline=True
-                )
-                
-                embed.set_thumbnail(url=after.avatar.url if after.avatar else after.default_avatar.url)
-                embed.timestamp = discord.utils.utcnow()
-                
-                await log_channel.send(embed=embed)
-            if log_channel:
-                embed = discord.Embed(
-                    title="📝 Nickname Changed",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(name="👤 Member", value=after.mention, inline=True)
-                embed.add_field(name="📛 Old Nickname", value=before.display_name or "None", inline=True)
-                embed.add_field(name="🆕 New Nickname", value=after.display_name or "None", inline=True)
-                embed.timestamp = discord.utils.utcnow()
-                embed.set_footer(text=f"User ID: {after.id}")
-                
-                await log_channel.send(embed=embed)
-                
-    except Exception as e:
-        print(f"Error logging member update: {e}")
-
-@bot.event
 async def on_member_remove(member):
     """Log member leaving the server"""
     if not MEMBER_LOG_CHANNEL_ID:
@@ -1997,67 +1875,6 @@ async def on_message_edit(before, after):
             
     except Exception as e:
         print(f"Error logging message edit: {e}")
-
-@bot.event
-async def on_message_delete(message):
-    """Log message deletions"""
-    if not MESSAGE_LOG_CHANNEL_ID or message.author.bot:
-        return
-        
-    try:
-        log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL_ID)
-        if log_channel:
-            embed = discord.Embed(
-                title="🗑️ Message Deleted",
-                color=discord.Color.red()
-            )
-            
-            embed.add_field(
-                name="👤 Author",
-                value=f"{message.author.mention} ({message.author.display_name})",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📍 Channel",
-                value=f"{message.channel.mention}",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📅 Sent",
-                value=discord.utils.format_dt(message.created_at, style='R'),
-                inline=True
-            )
-            
-            # Truncate content if too long
-            content = message.content[:1000] + "..." if len(message.content) > 1000 else message.content
-            
-            embed.add_field(
-                name="📝 Content",
-                value=content or "*No text content*",
-                inline=False
-            )
-            
-            # Show attachments if any
-            if message.attachments:
-                attachment_info = []
-                for att in message.attachments[:3]:  # Limit to 3 attachments
-                    attachment_info.append(f"📎 {att.filename} ({att.size} bytes)")
-                
-                embed.add_field(
-                    name="📎 Attachments",
-                    value="\n".join(attachment_info),
-                    inline=False
-                )
-            
-            embed.timestamp = discord.utils.utcnow()
-            embed.set_footer(text=f"Message ID: {message.id} | User ID: {message.author.id}")
-            
-            await log_channel.send(embed=embed)
-            
-    except Exception as e:
-        print(f"Error logging message deletion: {e}")
 
 @bot.event
 async def on_voice_state_update_extended(member, before, after):
@@ -2188,9 +2005,6 @@ async def on_member_join_extended(member):
 # =============================================================================
 
 # Commands for managing the bot - All moved to slash commands
-        
-    except Exception as e:
-        await ctx.send(f"❌ Error setting up logging: {e}")
 
 @bot.command(name="config", aliases=["config_status", "status"])
 @commands.has_permissions(administrator=True)
@@ -3704,48 +3518,47 @@ async def slash_welcome(interaction: discord.Interaction, member: discord.Member
         await interaction.response.send_message("❌ You need 'Manage Messages' permission to use this command.", ephemeral=True)
         return
     
+    # Defer the response since we might take some time to create the image
+    await interaction.response.defer(ephemeral=True)
+    
     try:
         # Get the welcome channel
         welcome_channel = interaction.channel
         if WELCOME_CHANNEL_ID:
             welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID) or interaction.channel
         
-        # Create welcome image
-        welcome_image = await create_welcome_image(member)
-        
-        # Create a welcome embed
+        # Select a random welcome message
         welcome_msg = random.choice(WELCOME_MESSAGES).format(member=member.mention)
-        embed = discord.Embed(
-            title="🎉 Welcome Message!",
-            description=welcome_msg,
-            color=discord.Color.gold()
-        )
+        
+        # Create welcome image with embedded welcome message
+        welcome_image = await create_welcome_image(member, welcome_msg)
         
         if welcome_image:
-            embed.set_image(url="")
+            # Send only the image with the embedded welcome message
+            await welcome_channel.send(f"🎉 **{member.mention} welcome message from {interaction.user.mention}!**", file=welcome_image)
         else:
+            # Fallback to embed if image creation fails
+            embed = discord.Embed(
+                title="🎉 Welcome Message!",
+                description=welcome_msg,
+                color=discord.Color.gold()
+            )
             embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
-        
-        embed.add_field(
-            name="Account Created", 
-            value=discord.utils.format_dt(member.created_at, style='R'), 
-            inline=True
-        )
-        embed.set_footer(text=f"Welcome to {interaction.guild.name}!")
-        
-        # Send welcome message
-        if welcome_image:
-            await welcome_channel.send(file=welcome_image, embed=embed)
-        else:
+            embed.add_field(
+                name="Account Created", 
+                value=discord.utils.format_dt(member.created_at, style='R'), 
+                inline=True
+            )
+            embed.set_footer(text=f"Welcome to {interaction.guild.name}!")
             await welcome_channel.send(embed=embed)
         
         if welcome_channel != interaction.channel:
-            await interaction.response.send_message(f"✅ Welcome message sent to {welcome_channel.mention} for {member.mention}", ephemeral=True)
+            await interaction.followup.send(f"✅ Welcome message sent to {welcome_channel.mention} for {member.mention}", ephemeral=True)
         else:
-            await interaction.response.send_message("✅ Welcome message sent!", ephemeral=True)
+            await interaction.followup.send("✅ Welcome message sent!", ephemeral=True)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error sending welcome message: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ Error sending welcome message: {e}", ephemeral=True)
 
 @bot.tree.command(name="dotgen_announce", description="Send an anonymous announcement to a specific channel", guild=guild_obj)
 @app_commands.describe(channel="The channel to send the announcement to", message="The announcement message (supports mentions)")

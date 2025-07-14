@@ -1,6 +1,6 @@
 import discord
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 
@@ -438,14 +438,18 @@ class RoleLogger:
         for role_id in added_role_ids:
             role = after.guild.get_role(role_id)
             if role:
-                await self.log_role_change(after, role, "added")
+                # Get moderator from audit logs
+                moderator = await self.get_moderator_from_audit_logs(after.guild, after, discord.AuditLogAction.member_role_update)
+                await self.log_role_change(after, role, "added", moderator)
         
         # Find removed roles
         removed_role_ids = before_roles - after_roles
         for role_id in removed_role_ids:
             role = before.guild.get_role(role_id)
             if role:
-                await self.log_role_change(after, role, "removed")
+                # Get moderator from audit logs
+                moderator = await self.get_moderator_from_audit_logs(before.guild, before, discord.AuditLogAction.member_role_update)
+                await self.log_role_change(after, role, "removed", moderator)
     
     def set_role_log_channel(self, channel_id):
         """Update the role log channel ID"""
@@ -475,6 +479,38 @@ class RoleLogger:
                 f.writelines(lines)
         
         print(f"✅ Role log channel updated to ID: {channel_id}")
+
+    async def get_moderator_from_audit_logs(self, guild, target_user, action_type=discord.AuditLogAction.member_role_update, limit=10, time_delta_seconds=30):
+        """Get the moderator who performed an action from audit logs"""
+        try:
+            # Check if bot has permission to view audit logs
+            if not guild.me.guild_permissions.view_audit_log:
+                print(f"⚠️ Bot doesn't have permission to view audit logs in {guild.name}")
+                return None
+            
+            # Search recent audit log entries
+            cutoff_time = datetime.utcnow() - timedelta(seconds=time_delta_seconds)
+            
+            async for entry in guild.audit_logs(
+                action=action_type,
+                limit=limit,
+                after=cutoff_time
+            ):
+                # Check if this entry matches our target user
+                if entry.target and entry.target.id == target_user.id:
+                    return entry.user
+            
+            return None
+            
+        except discord.Forbidden:
+            print(f"⚠️ No permission to access audit logs in {guild.name}")
+            return None
+        except discord.HTTPException as e:
+            print(f"⚠️ HTTP error accessing audit logs: {e}")
+            return None
+        except Exception as e:
+            print(f"⚠️ Error accessing audit logs: {e}")
+            return None
 
 # Helper functions for easy integration
 async def log_role_add(role_logger, member, role, moderator=None, reason=None):
