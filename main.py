@@ -1817,66 +1817,6 @@ async def on_member_remove(member):
         print(f"Error logging member leave: {e}")
 
 @bot.event
-async def on_message_edit(before, after):
-    """Log message edits"""
-    if not MESSAGE_LOG_CHANNEL_ID or before.author.bot:
-        return
-        
-    # Skip if content is the same (embed updates, etc.)
-    if before.content == after.content:
-        return
-        
-    try:
-        log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL_ID)
-        if log_channel:
-            embed = discord.Embed(
-                title="✏️ Message Edited",
-                color=discord.Color.orange()
-            )
-            
-            embed.add_field(
-                name="👤 Author",
-                value=f"{after.author.mention} ({after.author.display_name})",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📍 Channel",
-                value=f"{after.channel.mention}",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="🔗 Jump to Message",
-                value=f"[Click here]({after.jump_url})",
-                inline=True
-            )
-            
-            # Truncate content if too long
-            old_content = before.content[:500] + "..." if len(before.content) > 500 else before.content
-            new_content = after.content[:500] + "..." if len(after.content) > 500 else after.content
-            
-            embed.add_field(
-                name="📝 Before",
-                value=old_content or "*No content*",
-                inline=False
-            )
-            
-            embed.add_field(
-                name="🆕 After",
-                value=new_content or "*No content*",
-                inline=False
-            )
-            
-            embed.timestamp = discord.utils.utcnow()
-            embed.set_footer(text=f"Message ID: {after.id} | User ID: {after.author.id}")
-            
-            await log_channel.send(embed=embed)
-            
-    except Exception as e:
-        print(f"Error logging message edit: {e}")
-
-@bot.event
 async def on_voice_state_update_extended(member, before, after):
     """Extended voice state logging (separate from channel creation logic)"""
     if not VOICE_LOG_CHANNEL_ID:
