@@ -88,7 +88,7 @@ ALLOWED_ROLES=123456789012345678,987654321098765432  # Roles that can create voi
 SPECIFIC_VC_ROLE_IDS=123456789012345678,987654321098765432  # Specific roles for voice channel naming
 
 # OPTIONAL - Server Configuration
-GUILD_ID=123456789012345678                  # Guild ID for slash command sync
+GUILD_ID=                  # Guild ID for slash command sync
 BOT_PREFIX=!                                 # Command prefix (default: !)
 MAX_VOICE_CHANNEL_LIMIT=10                   # Max temporary voice channels
 ```
