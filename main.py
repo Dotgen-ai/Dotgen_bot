@@ -4577,15 +4577,6 @@ if YOUTUBE_DL_AVAILABLE:
             await interaction.followup.send(f"❌ Failed to connect to voice channel: {e}")
             return None
 
-else:
-    # Add disabled music commands when youtube-dl is not available
-    @bot.tree.command(name="dotgen_play", description="Play music from YouTube (DISABLED - requires yt-dlp)", guild=guild_obj)
-    async def slash_play_disabled(interaction: discord.Interaction, query: str):
-        await interaction.response.send_message(
-            "❌ Music functionality is disabled. Please install yt-dlp:\n```pip install yt-dlp```", 
-            ephemeral=True
-        )
-
 # =============================================================================
 # END MUSIC SLASH COMMANDS
 # =============================================================================
@@ -4745,68 +4736,6 @@ async def slash_setup_logging(interaction: discord.Interaction):
         
     except Exception as e:
         await interaction.response.send_message(f"❌ Error setting up logging: {e}", ephemeral=True)
-
-@bot.tree.command(name="dotgen_add_role", description="Add a role to a member", guild=guild_obj)
-@app_commands.describe(
-    member="The member to add the role to",
-    role="The role to add"
-)
-async def slash_add_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
-    """Add a role to a member"""
-    if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message("❌ You need manage roles permissions to use this command.", ephemeral=True)
-        return
-    
-    try:
-        if role in member.roles:
-            await interaction.response.send_message(f"❌ {member.mention} already has the role **{role.name}**.", ephemeral=True)
-            return
-        
-        await member.add_roles(role)
-        
-        embed = discord.Embed(
-            title="✅ Role Added",
-            description=f"Added **{role.name}** to {member.mention}",
-            color=discord.Color.green()
-        )
-        
-        await interaction.response.send_message(embed=embed)
-        
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error adding role: {e}", ephemeral=True)
-
-@bot.tree.command(name="dotgen_remove_role", description="Remove a role from a member", guild=guild_obj)
-@app_commands.describe(
-    member="The member to remove the role from",
-    role="The role to remove"
-)
-async def slash_remove_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
-    """Remove a role from a member"""
-    if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message("❌ You need manage roles permissions to use this command.", ephemeral=True)
-        return
-    
-    try:
-        if role not in member.roles:
-            await interaction.response.send_message(f"❌ {member.mention} doesn't have the role **{role.name}**.", ephemeral=True)
-            return
-        
-        await member.remove_roles(role)
-        
-        embed = discord.Embed(
-            title="✅ Role Removed",
-            description=f"Removed **{role.name}** from {member.mention}",
-            color=discord.Color.green()
-        )
-        
-        await interaction.response.send_message(embed=embed)
-        
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error removing role: {e}", ephemeral=True)
 
 @bot.tree.command(name="dotgen_list_roles", description="List all roles in the server", guild=guild_obj)
 async def slash_list_roles(interaction: discord.Interaction):
