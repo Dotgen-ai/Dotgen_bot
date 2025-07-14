@@ -14,6 +14,12 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 import io
 
+# Import role logging system
+from role_logger import RoleLogger, log_role_add, log_role_remove, log_bulk_role_add, log_bulk_role_remove
+
+# Import message logging system
+from message_logger import MessageLogger, log_message_deletion, log_message_edit, log_bulk_message_deletion
+
 # Music functionality imports with enhanced error handling
 try:
     import yt_dlp as youtube_dl
@@ -109,6 +115,12 @@ except:
 
 # Remove default help command to create our own dynamic one
 bot = commands.Bot(command_prefix=BOT_PREFIX, intents=intents, help_command=None)
+
+# Initialize role logging system
+role_logger = RoleLogger(bot)
+
+# Initialize message logging system
+message_logger = MessageLogger(bot)
 
 # Store temporary voice channels for cleanup and role-based grouping
 temp_voice_channels = {}
@@ -1278,52 +1290,6 @@ async def on_ready():
     if not privileged_intents_available:
         print(f"💡 Use {BOT_PREFIX}welcome @member to send welcome messages manually")
 
-# Manual welcome command (fallback for when privileged intents aren't available)
-@bot.command(name="welcome")
-async def manual_welcome(ctx, member: discord.Member = None):
-    """Send a welcome message for a member"""
-    if not member:
-        member = ctx.author
-    
-    try:
-        # Get the welcome channel from environment variable first
-        welcome_channel = None
-        
-        if WELCOME_CHANNEL_ID:
-            welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
-        
-        # Fallback to current channel if no specific channel ID is set
-        if not welcome_channel:
-            welcome_channel = ctx.channel
-        
-        if welcome_channel:
-            # Select a random welcome message
-            welcome_msg = random.choice(WELCOME_MESSAGES).format(member=member.mention)
-            
-            # Create a welcome embed
-            embed = discord.Embed(
-                title="🎉 Welcome Message!",
-                description=welcome_msg,
-                color=discord.Color.gold()
-            )
-            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
-            embed.add_field(
-                name="Account Created", 
-                value=discord.utils.format_dt(member.created_at, style='R'), 
-                inline=True
-            )
-            embed.set_footer(text=f"Welcome to {ctx.guild.name}!")
-            
-            await welcome_channel.send(embed=embed)
-            
-            if welcome_channel != ctx.channel:
-                await ctx.send(f"✅ Welcome message sent to {welcome_channel.mention} for {member.mention}")
-            else:
-                await ctx.send("✅ Welcome message sent!")
-            
-    except Exception as e:
-        await ctx.send(f"❌ Error sending welcome message: {e}")
-
 @bot.event
 async def on_member_join(member):
     """Send a unique welcome message when a new member joins (only works with privileged intents)"""
@@ -2141,159 +2107,7 @@ async def on_member_join_extended(member):
 # END LOGGING SYSTEM
 # =============================================================================
 
-# Commands for managing the bot
-@bot.command(name="setup_lobby")
-@commands.has_permissions(administrator=True)
-async def setup_lobby(ctx, *, category_name="Voice Channels"):
-    """Setup the lobby voice channel for creating temporary channels"""
-    try:
-        guild = ctx.guild
-        
-        # Find or create the category
-        category = discord.utils.get(guild.categories, name=category_name)
-        if not category:
-            category = await guild.create_category(category_name)
-        
-        # Create the lobby channel
-        lobby_channel = await guild.create_voice_channel(
-            name="Join to Create",
-            category=category,
-            user_limit=1
-        )
-        
-        embed = discord.Embed(
-            title="✅ Lobby Setup Complete!",
-            description=f"Created **{lobby_channel.name}** in **{category.name}** category.\n\nUsers can now join this channel to create their own role-based voice channels!\n\n**Channel ID:** `{lobby_channel.id}`\n**Category ID:** `{category.id}`\n\nAdd these IDs to your .env file for automatic detection.",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed)
-        
-    except Exception as e:
-        await ctx.send(f"❌ Error setting up lobby: {e}")
-
-@bot.command(name="get_ids", aliases=["ids"])
-@commands.has_permissions(administrator=True)
-async def get_ids(ctx, channel: discord.TextChannel = None):
-    """Get channel and server IDs for .env configuration"""
-    try:
-        guild = ctx.guild
-        
-        embed = discord.Embed(
-            title="📋 Server & Channel IDs",
-            description="Copy these IDs to your .env file for easy configuration:",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(
-            name="🏠 Server ID",
-            value=f"`{guild.id}`",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📝 Current Channel ID",
-            value=f"`{ctx.channel.id}`",
-            inline=True
-        )
-        
-        # If a channel is mentioned, show its ID
-        if channel:
-            embed.add_field(
-                name="🔗 Mentioned Channel ID",
-                value=f"`{channel.id}`",
-                inline=True
-            )
-        
-        # Show voice channels
-        voice_channels = [vc for vc in guild.voice_channels if "join to create" in vc.name.lower()]
-        if voice_channels:
-            embed.add_field(
-                name="🎤 Lobby Voice Channels",
-                value="\n".join([f"**{vc.name}:** `{vc.id}`" for vc in voice_channels[:5]]),
-                inline=False
-            )
-        
-        # Show categories
-        if guild.categories:
-            categories_text = "\n".join([f"**{cat.name}:** `{cat.id}`" for cat in guild.categories[:5]])
-            embed.add_field(
-                name="📁 Categories",
-                value=categories_text,
-                inline=False
-            )
-        
-        embed.set_footer(text="💡 Right-click on channels/categories in Discord and select 'Copy ID' to get their IDs")
-        
-        await ctx.send(embed=embed)
-        
-    except Exception as e:
-        await ctx.send(f"❌ Error getting IDs: {e}")
-
-@bot.command(name="setup_logging", aliases=["logging_setup"])
-@commands.has_permissions(administrator=True)
-async def setup_logging(ctx):
-    """Setup logging channels for comprehensive server monitoring"""
-    try:
-        guild = ctx.guild
-        
-        embed = discord.Embed(
-            title="📋 Logging Channels Setup",
-            description="Configure logging channels for comprehensive server monitoring:",
-            color=discord.Color.blue()
-        )
-        
-        # Check current logging channel configurations
-        logging_configs = [
-            ("MEMBER_LOG_CHANNEL_ID", MEMBER_LOG_CHANNEL_ID, "👥 Member Join/Leave", "member-logs"),
-            ("ROLE_LOG_CHANNEL_ID", ROLE_LOG_CHANNEL_ID, "🎭 Role Changes", "role-logs"), 
-            ("MESSAGE_LOG_CHANNEL_ID", MESSAGE_LOG_CHANNEL_ID, "💬 Message Edit/Delete", "message-logs"),
-            ("VOICE_LOG_CHANNEL_ID", VOICE_LOG_CHANNEL_ID, "🎤 Voice Activity", "voice-logs"),
-            ("MODERATION_LOG_CHANNEL_ID", MODERATION_LOG_CHANNEL_ID, "🛡️ Moderation Actions", "mod-logs")
-        ]
-        
-        configured_channels = []
-        missing_channels = []
-        
-        for env_var, channel_id, description, suggested_name in logging_configs:
-            if channel_id:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    configured_channels.append(f"✅ {description}: {channel.mention}")
-                else:
-                    missing_channels.append(f"❌ {description}: Invalid ID ({channel_id})")
-            else:
-                missing_channels.append(f"⚪ {description}: Not configured")
-                
-        if configured_channels:
-            embed.add_field(
-                name="✅ Configured Logging Channels",
-                value="\n".join(configured_channels),
-                inline=False
-            )
-            
-        if missing_channels:
-            embed.add_field(
-                name="⚠️ Missing/Invalid Logging Channels", 
-                value="\n".join(missing_channels),
-                inline=False
-            )
-            
-        # Instructions for setup
-        embed.add_field(
-            name="🔧 Setup Instructions",
-            value="1. Create text channels for each log type\n2. Use `/get_ids` to get their channel IDs\n3. Add the IDs to your `.env` file\n4. Restart the bot\n\n**Suggested channel names:**\n`#member-logs` `#role-logs` `#message-logs`\n`#voice-logs` `#mod-logs`",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📝 What Gets Logged",
-            value="**Member Logs:** Join/leave events, account age warnings\n**Role Logs:** Role additions/removals, nickname changes\n**Message Logs:** Message edits and deletions\n**Voice Logs:** VC join/leave/move, mute/deafen changes\n**Mod Logs:** General moderation actions",
-            inline=False
-        )
-        
-        embed.set_footer(text="💡 Each log type can use the same channel or separate channels for organization")
-        
-        await ctx.send(embed=embed)
+# Commands for managing the bot - All moved to slash commands
         
     except Exception as e:
         await ctx.send(f"❌ Error setting up logging: {e}")
@@ -3530,6 +3344,91 @@ async def on_command_error(ctx, error):
         print(f"Command error: {error}")
 
 # =============================================================================
+# ROLE LOGGING EVENT HANDLERS
+# =============================================================================
+
+@bot.event
+async def on_member_update(before, after):
+    """Handle member updates to detect role changes"""
+    try:
+        await role_logger.on_member_update(before, after)
+    except Exception as e:
+        print(f"Error in role logging member update: {e}")
+
+@bot.event
+async def on_guild_role_create(role):
+    """Handle role creation"""
+    try:
+        await role_logger.log_role_creation(role)
+    except Exception as e:
+        print(f"Error logging role creation: {e}")
+
+@bot.event
+async def on_guild_role_delete(role):
+    """Handle role deletion"""
+    try:
+        await role_logger.log_role_deletion(role)
+    except Exception as e:
+        print(f"Error logging role deletion: {e}")
+
+@bot.event
+async def on_guild_role_update(before, after):
+    """Handle role updates (name, color, permissions, etc.)"""
+    try:
+        await role_logger.log_role_update(before, after)
+    except Exception as e:
+        print(f"Error logging role update: {e}")
+
+# =============================================================================
+# END ROLE LOGGING EVENT HANDLERS
+# =============================================================================
+
+# =============================================================================
+# MESSAGE LOGGING EVENT HANDLERS
+# =============================================================================
+
+@bot.event
+async def on_message(message):
+    """Cache messages for deletion tracking and process commands"""
+    try:
+        # Cache message for deletion logging
+        await message_logger.on_message(message)
+        
+        # Process commands (important to keep this for bot functionality)
+        await bot.process_commands(message)
+        
+    except Exception as e:
+        print(f"Error in message handler: {e}")
+
+@bot.event
+async def on_message_delete(message):
+    """Handle message deletion"""
+    try:
+        await message_logger.on_message_delete(message)
+    except Exception as e:
+        print(f"Error in message delete handler: {e}")
+
+@bot.event
+async def on_message_edit(before, after):
+    """Handle message edits"""
+    try:
+        await message_logger.on_message_edit(before, after)
+    except Exception as e:
+        print(f"Error in message edit handler: {e}")
+
+@bot.event
+async def on_bulk_message_delete(messages):
+    """Handle bulk message deletion"""
+    try:
+        await message_logger.on_bulk_message_delete(messages)
+    except Exception as e:
+        print(f"Error in bulk message delete handler: {e}")
+
+# =============================================================================
+# END MESSAGE LOGGING EVENT HANDLERS
+# =============================================================================
+
+# =============================================================================
 # WEBSERVER FOR 24/7 OPERATION
 # =============================================================================
 # This Flask webserver helps keep the bot alive when deployed to cloud platforms
@@ -4609,6 +4508,1233 @@ else:
 
 # =============================================================================
 # END MUSIC SLASH COMMANDS
+# =============================================================================
+
+# =============================================================================
+# ADMIN SLASH COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="dotgen_setup_lobby", description="Setup the lobby voice channel for creating temporary channels", guild=guild_obj)
+@app_commands.describe(category_name="Name of the category to create/use (default: Voice Channels)")
+async def slash_setup_lobby(interaction: discord.Interaction, category_name: str = "Voice Channels"):
+    """Setup the lobby voice channel for creating temporary channels"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        guild = interaction.guild
+        
+        # Find or create the category
+        category = discord.utils.get(guild.categories, name=category_name)
+        if not category:
+            category = await guild.create_category(category_name)
+        
+        # Create the lobby channel
+        lobby_channel = await guild.create_voice_channel(
+            name="Join to Create",
+            category=category,
+            user_limit=1
+        )
+        
+        embed = discord.Embed(
+            title="✅ Lobby Setup Complete!",
+            description=f"Created **{lobby_channel.name}** in **{category.name}** category.\n\nUsers can now join this channel to create their own role-based voice channels!\n\n**Channel ID:** `{lobby_channel.id}`\n**Category ID:** `{category.id}`\n\nAdd these IDs to your .env file for automatic detection.",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error setting up lobby: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_get_ids", description="Get channel and server IDs for .env configuration", guild=guild_obj)
+@app_commands.describe(channel="Optional channel to get ID for")
+async def slash_get_ids(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    """Get channel and server IDs for .env configuration"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        guild = interaction.guild
+        
+        embed = discord.Embed(
+            title="📋 Server & Channel IDs",
+            description="Copy these IDs to your .env file for easy configuration:",
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(
+            name="🏠 Server ID",
+            value=f"`{guild.id}`",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📝 Current Channel ID",
+            value=f"`{interaction.channel.id}`",
+            inline=True
+        )
+        
+        # If a channel is mentioned, show its ID
+        if channel:
+            embed.add_field(
+                name="🔗 Mentioned Channel ID",
+                value=f"`{channel.id}`",
+                inline=True
+            )
+        
+        # Show voice channels
+        voice_channels = [vc for vc in guild.voice_channels if "join to create" in vc.name.lower()]
+        if voice_channels:
+            embed.add_field(
+                name="🎤 Lobby Voice Channels",
+                value="\n".join([f"**{vc.name}:** `{vc.id}`" for vc in voice_channels[:5]]),
+                inline=False
+            )
+        
+        # Show categories
+        if guild.categories:
+            categories_text = "\n".join([f"**{cat.name}:** `{cat.id}`" for cat in guild.categories[:5]])
+            embed.add_field(
+                name="📁 Categories",
+                value=categories_text,
+                inline=False
+            )
+        
+        embed.set_footer(text="💡 Right-click on channels/categories in Discord and select 'Copy ID' to get their IDs")
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error getting IDs: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_setup_logging", description="Setup logging channels for comprehensive server monitoring", guild=guild_obj)
+async def slash_setup_logging(interaction: discord.Interaction):
+    """Setup logging channels for comprehensive server monitoring"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        guild = interaction.guild
+        
+        embed = discord.Embed(
+            title="📋 Logging Channels Setup",
+            description="Configure logging channels for comprehensive server monitoring:",
+            color=discord.Color.blue()
+        )
+        
+        # Check current logging channel configurations
+        logging_configs = [
+            ("MEMBER_LOG_CHANNEL_ID", MEMBER_LOG_CHANNEL_ID, "👥 Member Join/Leave", "member-logs"),
+            ("ROLE_LOG_CHANNEL_ID", ROLE_LOG_CHANNEL_ID, "🎭 Role Changes", "role-logs"), 
+            ("MESSAGE_LOG_CHANNEL_ID", MESSAGE_LOG_CHANNEL_ID, "💬 Message Edit/Delete", "message-logs"),
+            ("VOICE_LOG_CHANNEL_ID", VOICE_LOG_CHANNEL_ID, "🎤 Voice Activity", "voice-logs"),
+        ]
+        
+        for env_var, channel_id, description, suggested_name in logging_configs:
+            if channel_id:
+                channel = guild.get_channel(channel_id)
+                if channel:
+                    embed.add_field(
+                        name=f"✅ {description}",
+                        value=f"**Channel:** {channel.mention}\n**ID:** `{channel.id}`",
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name=f"❌ {description}",
+                        value=f"**Channel ID:** `{channel_id}` (Not found)\n**Status:** Channel may have been deleted",
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name=f"⚠️ {description}",
+                    value=f"**Status:** Not configured\n**Suggested:** Create `#{suggested_name}` channel",
+                    inline=False
+                )
+        
+        embed.add_field(
+            name="🔧 Configuration Instructions",
+            value="1. Create logging channels manually\n2. Use `/dotgen_get_ids` to get channel IDs\n3. Add IDs to your .env file\n4. Restart the bot",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error setting up logging: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_add_role", description="Add a role to a member", guild=guild_obj)
+@app_commands.describe(
+    member="The member to add the role to",
+    role="The role to add"
+)
+async def slash_add_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    """Add a role to a member"""
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("❌ You need manage roles permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        if role in member.roles:
+            await interaction.response.send_message(f"❌ {member.mention} already has the role **{role.name}**.", ephemeral=True)
+            return
+        
+        await member.add_roles(role)
+        
+        embed = discord.Embed(
+            title="✅ Role Added",
+            description=f"Added **{role.name}** to {member.mention}",
+            color=discord.Color.green()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error adding role: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_remove_role", description="Remove a role from a member", guild=guild_obj)
+@app_commands.describe(
+    member="The member to remove the role from",
+    role="The role to remove"
+)
+async def slash_remove_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    """Remove a role from a member"""
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("❌ You need manage roles permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        if role not in member.roles:
+            await interaction.response.send_message(f"❌ {member.mention} doesn't have the role **{role.name}**.", ephemeral=True)
+            return
+        
+        await member.remove_roles(role)
+        
+        embed = discord.Embed(
+            title="✅ Role Removed",
+            description=f"Removed **{role.name}** from {member.mention}",
+            color=discord.Color.green()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error removing role: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_list_roles", description="List all roles in the server", guild=guild_obj)
+async def slash_list_roles(interaction: discord.Interaction):
+    """List all roles in the server"""
+    try:
+        guild = interaction.guild
+        roles = sorted(guild.roles, key=lambda r: r.position, reverse=True)
+        
+        embed = discord.Embed(
+            title=f"📋 Roles in {guild.name}",
+            description=f"Found {len(roles)} roles in this server:",
+            color=discord.Color.blue()
+        )
+        
+        # Split roles into chunks for multiple fields
+        role_chunks = [roles[i:i+10] for i in range(0, len(roles), 10)]
+        
+        for i, chunk in enumerate(role_chunks[:5]):  # Limit to first 5 chunks
+            role_list = []
+            for role in chunk:
+                if role.name == "@everyone":
+                    role_list.append(f"**@everyone** (ID: `{role.id}`)")
+                else:
+                    role_list.append(f"**{role.name}** (ID: `{role.id}`)")
+            
+            embed.add_field(
+                name=f"Roles {i*10 + 1}-{min((i+1)*10, len(roles))}",
+                value="\n".join(role_list),
+                inline=False
+            )
+        
+        if len(roles) > 50:
+            embed.add_field(
+                name="Note",
+                value=f"Showing first 50 roles. Total: {len(roles)}",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error listing roles: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_voice_stats", description="Show voice channel statistics", guild=guild_obj)
+async def slash_voice_stats(interaction: discord.Interaction):
+    """Show voice channel statistics"""
+    try:
+        guild = interaction.guild
+        
+        embed = discord.Embed(
+            title="📊 Voice Channel Statistics",
+            description=f"Current voice activity in **{guild.name}**",
+            color=discord.Color.blue()
+        )
+        
+        # Get voice channels
+        voice_channels = guild.voice_channels
+        total_channels = len(voice_channels)
+        active_channels = len([vc for vc in voice_channels if vc.members])
+        total_members = sum(len(vc.members) for vc in voice_channels)
+        
+        embed.add_field(
+            name="📈 Overview",
+            value=f"**Total Voice Channels:** {total_channels}\n**Active Channels:** {active_channels}\n**Members in Voice:** {total_members}",
+            inline=False
+        )
+        
+        # Show active channels
+        if active_channels > 0:
+            active_channel_list = []
+            for vc in voice_channels:
+                if vc.members:
+                    member_names = ", ".join([member.display_name for member in vc.members[:5]])
+                    if len(vc.members) > 5:
+                        member_names += f" and {len(vc.members) - 5} more..."
+                    active_channel_list.append(f"**{vc.name}** ({len(vc.members)} members)\n└ {member_names}")
+            
+            embed.add_field(
+                name="🎤 Active Channels",
+                value="\n\n".join(active_channel_list[:10]),
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error getting voice stats: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_cleanup", description="Cleanup empty voice channels", guild=guild_obj)
+async def slash_cleanup(interaction: discord.Interaction):
+    """Cleanup empty voice channels"""
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.response.send_message("❌ You need manage channels permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        guild = interaction.guild
+        cleaned_count = 0
+        
+        # Find temporary voice channels (created by bot)
+        temp_channels = []
+        for channel in guild.voice_channels:
+            if (channel.name.startswith("🎤") or 
+                "temp" in channel.name.lower() or 
+                (channel.category and "voice" in channel.category.name.lower() and len(channel.members) == 0)):
+                temp_channels.append(channel)
+        
+        # Delete empty temporary channels
+        for channel in temp_channels:
+            if len(channel.members) == 0:
+                try:
+                    await channel.delete()
+                    cleaned_count += 1
+                except:
+                    pass
+        
+        embed = discord.Embed(
+            title="🧹 Cleanup Complete",
+            description=f"Cleaned up {cleaned_count} empty voice channels.",
+            color=discord.Color.green()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error during cleanup: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_send", description="Send a message to a specific channel", guild=guild_obj)
+@app_commands.describe(
+    channel="The channel to send the message to",
+    message="The message to send"
+)
+async def slash_send(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    """Send a message to a specific channel"""
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ You need manage messages permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        await channel.send(message)
+        
+        embed = discord.Embed(
+            title="✅ Message Sent",
+            description=f"Message sent to {channel.mention}",
+            color=discord.Color.green()
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error sending message: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_announce_all", description="Send an announcement to all text channels", guild=guild_obj)
+@app_commands.describe(message="The announcement message to send")
+async def slash_announce_all(interaction: discord.Interaction, message: str):
+    """Send an announcement to all text channels"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    try:
+        guild = interaction.guild
+        sent_count = 0
+        
+        # Send to all text channels
+        for channel in guild.text_channels:
+            try:
+                await channel.send(f"📢 **Server Announcement:**\n{message}")
+                sent_count += 1
+            except:
+                pass
+        
+        embed = discord.Embed(
+            title="📢 Announcement Sent",
+            description=f"Announcement sent to {sent_count} channels.",
+            color=discord.Color.green()
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error sending announcement: {e}", ephemeral=True)
+
+@bot.tree.command(name="dotgen_echo", description="Echo a message", guild=guild_obj)
+@app_commands.describe(message="The message to echo")
+async def slash_echo(interaction: discord.Interaction, message: str):
+    """Echo a message"""
+    await interaction.response.send_message(message)
+
+@bot.tree.command(name="dotgen_botstatus", description="Control the bot's rotating status", guild=guild_obj)
+@app_commands.describe(
+    action="Action to perform (current, stop, start, custom)",
+    custom_status="Custom status message (only for custom action)"
+)
+async def slash_botstatus(interaction: discord.Interaction, action: str = "current", custom_status: str = None):
+    """Control the bot's rotating status"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    action = action.lower()
+    
+    try:
+        if action == "current":
+            current_activity = ACTIVITIES[current_activity_index]
+            embed = discord.Embed(
+                title="📊 Current Bot Status",
+                description=f"**Activity:** {current_activity['name']}\n**Type:** {current_activity['type'].name.title()}",
+                color=discord.Color.blue()
+            )
+            await interaction.response.send_message(embed=embed)
+        
+        elif action == "stop":
+            await bot.change_presence(activity=None, status=discord.Status.online)
+            embed = discord.Embed(
+                title="⏹️ Status Rotation Stopped",
+                description="Bot status rotation has been stopped.",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed)
+        
+        elif action == "start":
+            await start_rotating_status()
+            embed = discord.Embed(
+                title="▶️ Status Rotation Started",
+                description="Bot status rotation has been started.",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
+        
+        elif action == "custom":
+            if not custom_status:
+                await interaction.response.send_message("❌ Please provide a custom status message.", ephemeral=True)
+                return
+            
+            await bot.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.custom,
+                    name=custom_status
+                ),
+                status=discord.Status.online
+            )
+            
+            embed = discord.Embed(
+                title="🎨 Custom Status Set",
+                description=f"Bot status set to: **{custom_status}**",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
+        
+        else:
+            await interaction.response.send_message("❌ Invalid action. Use: current, stop, start, or custom", ephemeral=True)
+    
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error controlling bot status: {e}", ephemeral=True)
+
+# =============================================================================
+# MISSING MUSIC SLASH COMMANDS
+# =============================================================================
+
+if YOUTUBE_DL_AVAILABLE:
+    @bot.tree.command(name="dotgen_swap", description="Swap positions of two songs in the queue", guild=guild_obj)
+    @app_commands.describe(
+        position1="First song position",
+        position2="Second song position"
+    )
+    async def slash_swap(interaction: discord.Interaction, position1: int, position2: int):
+        """Swap positions of two songs in the queue"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You must be in a voice channel to use music commands.", ephemeral=True)
+            return
+        
+        player = music_players.get(interaction.guild.id)
+        if not player or not player.queue:
+            await interaction.response.send_message("❌ No songs in queue to swap.", ephemeral=True)
+            return
+        
+        try:
+            # Adjust for 0-based indexing
+            pos1 = position1 - 1
+            pos2 = position2 - 1
+            
+            if pos1 < 0 or pos2 < 0 or pos1 >= len(player.queue) or pos2 >= len(player.queue):
+                await interaction.response.send_message("❌ Invalid position numbers.", ephemeral=True)
+                return
+            
+            # Swap the songs
+            player.queue[pos1], player.queue[pos2] = player.queue[pos2], player.queue[pos1]
+            
+            embed = discord.Embed(
+                title="🔄 Songs Swapped",
+                description=f"Swapped positions {position1} and {position2} in the queue.",
+                color=discord.Color.green()
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error swapping songs: {e}", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_clear", description="Clear the entire music queue", guild=guild_obj)
+    async def slash_clear(interaction: discord.Interaction):
+        """Clear the entire music queue"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You must be in a voice channel to use music commands.", ephemeral=True)
+            return
+        
+        player = music_players.get(interaction.guild.id)
+        if not player:
+            await interaction.response.send_message("❌ No music player found.", ephemeral=True)
+            return
+        
+        try:
+            cleared_count = len(player.queue)
+            player.queue.clear()
+            
+            embed = discord.Embed(
+                title="🧹 Queue Cleared",
+                description=f"Cleared {cleared_count} songs from the queue.",
+                color=discord.Color.green()
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error clearing queue: {e}", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_history", description="Show recently played songs", guild=guild_obj)
+    async def slash_history(interaction: discord.Interaction):
+        """Show recently played songs"""
+        player = music_players.get(interaction.guild.id)
+        if not player or not player.history:
+            await interaction.response.send_message("❌ No song history found.", ephemeral=True)
+            return
+        
+        try:
+            embed = discord.Embed(
+                title="📜 Song History",
+                description="Recently played songs:",
+                color=discord.Color.blue()
+            )
+            
+            # Show last 10 songs from history
+            for i, track in enumerate(player.history[-10:], 1):
+                embed.add_field(
+                    name=f"{i}. {track.title}",
+                    value=f"**Duration:** {track.duration}\n**Added by:** {track.added_by}",
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error getting history: {e}", ephemeral=True)
+
+    # =============================================================================
+    # ROLE MANAGEMENT SLASH COMMANDS
+    # =============================================================================
+
+    @bot.tree.command(name="dotgen_add_role", description="Add a role to a member with logging", guild=guild_obj)
+    @app_commands.describe(
+        member="The member to give the role to",
+        role="The role to add",
+        reason="Reason for adding the role (optional)"
+    )
+    async def slash_add_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role, reason: str = None):
+        """Add a role to a member with automatic logging"""
+        
+        # Check permissions
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ You don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        # Check if bot can manage the role
+        if not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ I don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        # Check role hierarchy
+        if role.position >= interaction.guild.me.top_role.position:
+            await interaction.response.send_message("❌ I cannot assign roles higher than or equal to my highest role.", ephemeral=True)
+            return
+        
+        if role.position >= interaction.user.top_role.position and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You cannot assign roles higher than your highest role.", ephemeral=True)
+            return
+        
+        try:
+            # Check if member already has the role
+            if role in member.roles:
+                await interaction.response.send_message(f"❌ {member.display_name} already has the role {role.name}.", ephemeral=True)
+                return
+            
+            # Add the role
+            await member.add_roles(role, reason=reason or f"Role added by {interaction.user.display_name}")
+            
+            # Log the role addition
+            await log_role_add(role_logger, member, role, interaction.user, reason)
+            
+            # Create success embed
+            embed = discord.Embed(
+                title="✅ Role Added Successfully",
+                color=discord.Color.green(),
+                timestamp=datetime.utcnow()
+            )
+            
+            embed.add_field(
+                name="👤 Member",
+                value=f"{member.mention} ({member.display_name})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🎭 Role",
+                value=f"{role.mention} ({role.name})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🛡️ Added By",
+                value=f"{interaction.user.mention}",
+                inline=True
+            )
+            
+            if reason:
+                embed.add_field(
+                    name="📝 Reason",
+                    value=reason,
+                    inline=False
+                )
+            
+            embed.set_footer(text="Role change has been logged to the role log channel")
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error adding role: {e}", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_remove_role", description="Remove a role from a member with logging", guild=guild_obj)
+    @app_commands.describe(
+        member="The member to remove the role from",
+        role="The role to remove",
+        reason="Reason for removing the role (optional)"
+    )
+    async def slash_remove_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role, reason: str = None):
+        """Remove a role from a member with automatic logging"""
+        
+        # Check permissions
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ You don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        # Check if bot can manage the role
+        if not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ I don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        # Check role hierarchy
+        if role.position >= interaction.guild.me.top_role.position:
+            await interaction.response.send_message("❌ I cannot manage roles higher than or equal to my highest role.", ephemeral=True)
+            return
+        
+        if role.position >= interaction.user.top_role.position and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You cannot manage roles higher than your highest role.", ephemeral=True)
+            return
+        
+        try:
+            # Check if member has the role
+            if role not in member.roles:
+                await interaction.response.send_message(f"❌ {member.display_name} doesn't have the role {role.name}.", ephemeral=True)
+                return
+            
+            # Remove the role
+            await member.remove_roles(role, reason=reason or f"Role removed by {interaction.user.display_name}")
+            
+            # Log the role removal
+            await log_role_remove(role_logger, member, role, interaction.user, reason)
+            
+            # Create success embed
+            embed = discord.Embed(
+                title="❌ Role Removed Successfully",
+                color=discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+            
+            embed.add_field(
+                name="👤 Member",
+                value=f"{member.mention} ({member.display_name})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🎭 Role",
+                value=f"{role.mention} ({role.name})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🛡️ Removed By",
+                value=f"{interaction.user.mention}",
+                inline=True
+            )
+            
+            if reason:
+                embed.add_field(
+                    name="📝 Reason",
+                    value=reason,
+                    inline=False
+                )
+            
+            embed.set_footer(text="Role change has been logged to the role log channel")
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error removing role: {e}", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_bulk_add_role", description="Add a role to multiple members with logging", guild=guild_obj)
+    @app_commands.describe(
+        role="The role to add to members",
+        members="Members to add the role to (space separated mentions or IDs)",
+        reason="Reason for adding the role (optional)"
+    )
+    async def slash_bulk_add_role(interaction: discord.Interaction, role: discord.Role, members: str, reason: str = None):
+        """Add a role to multiple members with automatic logging"""
+        
+        # Check permissions
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ You don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        if not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ I don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        # Check role hierarchy
+        if role.position >= interaction.guild.me.top_role.position:
+            await interaction.response.send_message("❌ I cannot assign roles higher than or equal to my highest role.", ephemeral=True)
+            return
+        
+        if role.position >= interaction.user.top_role.position and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You cannot assign roles higher than your highest role.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            # Parse member mentions and IDs
+            member_list = []
+            parts = members.split()
+            
+            for part in parts:
+                try:
+                    # Try to extract member ID from mention or use as direct ID
+                    member_id = int(part.strip('<@!>'))
+                    member = interaction.guild.get_member(member_id)
+                    if member and role not in member.roles:
+                        member_list.append(member)
+                except ValueError:
+                    continue
+            
+            if not member_list:
+                await interaction.followup.send("❌ No valid members found or all members already have this role.", ephemeral=True)
+                return
+            
+            # Add role to all members
+            successful = []
+            failed = []
+            
+            for member in member_list:
+                try:
+                    await member.add_roles(role, reason=reason or f"Bulk role addition by {interaction.user.display_name}")
+                    successful.append(member)
+                except Exception as e:
+                    failed.append((member, str(e)))
+            
+            # Log the bulk role addition
+            if successful:
+                await log_bulk_role_add(role_logger, successful, role, interaction.user, reason)
+            
+            # Create response embed
+            embed = discord.Embed(
+                title="✅ Bulk Role Addition Complete",
+                color=discord.Color.green(),
+                timestamp=datetime.utcnow()
+            )
+            
+            embed.add_field(
+                name="🎭 Role Added",
+                value=f"{role.mention} ({role.name})",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="✅ Successful",
+                value=f"{len(successful)} members",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="❌ Failed",
+                value=f"{len(failed)} members",
+                inline=True
+            )
+            
+            if successful:
+                success_list = [f"• {member.display_name}" for member in successful[:10]]
+                if len(successful) > 10:
+                    success_list.append(f"... and {len(successful) - 10} more")
+                
+                embed.add_field(
+                    name="👥 Members Added",
+                    value="\n".join(success_list),
+                    inline=False
+                )
+            
+            if reason:
+                embed.add_field(
+                    name="📝 Reason",
+                    value=reason,
+                    inline=False
+                )
+            
+            embed.set_footer(text="Bulk role changes have been logged to the role log channel")
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error during bulk role addition: {e}", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_bulk_remove_role", description="Remove a role from multiple members with logging", guild=guild_obj)
+    @app_commands.describe(
+        role="The role to remove from members",
+        members="Members to remove the role from (space separated mentions or IDs)",
+        reason="Reason for removing the role (optional)"
+    )
+    async def slash_bulk_remove_role(interaction: discord.Interaction, role: discord.Role, members: str, reason: str = None):
+        """Remove a role from multiple members with automatic logging"""
+        
+        # Check permissions
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ You don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        if not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ I don't have permission to manage roles.", ephemeral=True)
+            return
+        
+        # Check role hierarchy
+        if role.position >= interaction.guild.me.top_role.position:
+            await interaction.response.send_message("❌ I cannot manage roles higher than or equal to my highest role.", ephemeral=True)
+            return
+        
+        if role.position >= interaction.user.top_role.position and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You cannot manage roles higher than your highest role.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            # Parse member mentions and IDs
+            member_list = []
+            parts = members.split()
+            
+            for part in parts:
+                try:
+                    # Try to extract member ID from mention or use as direct ID
+                    member_id = int(part.strip('<@!>'))
+                    member = interaction.guild.get_member(member_id)
+                    if member and role in member.roles:
+                        member_list.append(member)
+                except ValueError:
+                    continue
+            
+            if not member_list:
+                await interaction.followup.send("❌ No valid members found or no members have this role.", ephemeral=True)
+                return
+            
+            # Remove role from all members
+            successful = []
+            failed = []
+            
+            for member in member_list:
+                try:
+                    await member.remove_roles(role, reason=reason or f"Bulk role removal by {interaction.user.display_name}")
+                    successful.append(member)
+                except Exception as e:
+                    failed.append((member, str(e)))
+            
+            # Log the bulk role removal
+            if successful:
+                await log_bulk_role_remove(role_logger, successful, role, interaction.user, reason)
+            
+            # Create response embed
+            embed = discord.Embed(
+                title="❌ Bulk Role Removal Complete",
+                color=discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+            
+            embed.add_field(
+                name="🎭 Role Removed",
+                value=f"{role.mention} ({role.name})",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="✅ Successful",
+                value=f"{len(successful)} members",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="❌ Failed",
+                value=f"{len(failed)} members",
+                inline=True
+            )
+            
+            if successful:
+                success_list = [f"• {member.display_name}" for member in successful[:10]]
+                if len(successful) > 10:
+                    success_list.append(f"... and {len(successful) - 10} more")
+                
+                embed.add_field(
+                    name="👥 Members Removed",
+                    value="\n".join(success_list),
+                    inline=False
+                )
+            
+            if reason:
+                embed.add_field(
+                    name="📝 Reason",
+                    value=reason,
+                    inline=False
+                )
+            
+            embed.set_footer(text="Bulk role changes have been logged to the role log channel")
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error during bulk role removal: {e}", ephemeral=True)
+
+    @bot.tree.command(name="dotgen_role_info", description="Get detailed information about a role", guild=guild_obj)
+    @app_commands.describe(role="The role to get information about")
+    async def slash_role_info(interaction: discord.Interaction, role: discord.Role):
+        """Get detailed information about a role"""
+        
+        embed = discord.Embed(
+            title=f"🎭 Role Information: {role.name}",
+            color=role.color if role.color != discord.Color.default() else discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        
+        # Basic info
+        embed.add_field(
+            name="📝 Basic Information",
+            value=f"**Name:** {role.name}\n**ID:** `{role.id}`\n**Color:** {role.color}\n**Position:** {role.position}",
+            inline=True
+        )
+        
+        # Member count
+        embed.add_field(
+            name="👥 Members",
+            value=f"{len(role.members)} members have this role",
+            inline=True
+        )
+        
+        # Properties
+        properties = []
+        if role.hoist:
+            properties.append("✅ Hoisted (shown separately)")
+        if role.mentionable:
+            properties.append("✅ Mentionable")
+        if role.managed:
+            properties.append("✅ Managed by Integration")
+        if role.is_default():
+            properties.append("✅ Everyone Role")
+        if role.is_premium_subscriber():
+            properties.append("✅ Nitro Booster Role")
+        
+        embed.add_field(
+            name="⚙️ Properties",
+            value="\n".join(properties) if properties else "No special properties",
+            inline=True
+        )
+        
+        # Creation date
+        embed.add_field(
+            name="📅 Created",
+            value=f"{role.created_at.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+            inline=True
+        )
+        
+        # Hierarchy
+        roles_above = len([r for r in interaction.guild.roles if r.position > role.position])
+        roles_below = len([r for r in interaction.guild.roles if r.position < role.position])
+        
+        embed.add_field(
+            name="📈 Hierarchy",
+            value=f"**Roles above:** {roles_above}\n**Roles below:** {roles_below}",
+            inline=True
+        )
+        
+        # Permissions (show key ones)
+        key_perms = []
+        if role.permissions.administrator:
+            key_perms.append("🔑 Administrator")
+        if role.permissions.manage_guild:
+            key_perms.append("🏠 Manage Server")
+        if role.permissions.manage_roles:
+            key_perms.append("🎭 Manage Roles")
+        if role.permissions.manage_channels:
+            key_perms.append("📁 Manage Channels")
+        if role.permissions.kick_members:
+            key_perms.append("👢 Kick Members")
+        if role.permissions.ban_members:
+            key_perms.append("🔨 Ban Members")
+        if role.permissions.moderate_members:
+            key_perms.append("⏰ Timeout Members")
+        
+        if key_perms:
+            embed.add_field(
+                name="🔑 Key Permissions",
+                value="\n".join(key_perms[:10]),
+                inline=False
+            )
+        
+        # Show some members (if any)
+        if role.members:
+            member_list = [member.display_name for member in role.members[:10]]
+            if len(role.members) > 10:
+                member_list.append(f"... and {len(role.members) - 10} more")
+            
+            embed.add_field(
+                name="👥 Some Members",
+                value="\n".join([f"• {name}" for name in member_list]),
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Role ID: {role.id}")
+        
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_role_log_channel", description="Set or view the role log channel", guild=guild_obj)
+    @app_commands.describe(channel="The channel to use for role logs (leave empty to view current)")
+    async def slash_role_log_channel(interaction: discord.Interaction, channel: discord.TextChannel = None):
+        """Set or view the role log channel"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You need administrator permissions to configure role logging.", ephemeral=True)
+            return
+        
+        if channel:
+            # Set new role log channel
+            role_logger.set_role_log_channel(channel.id)
+            
+            embed = discord.Embed(
+                title="✅ Role Log Channel Updated",
+                description=f"Role changes will now be logged to {channel.mention}",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(
+                name="📋 What Gets Logged",
+                value="• Role additions and removals\n• Bulk role changes\n• Role creations and deletions\n• Role property updates",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            # Show current role log channel
+            current_channel = role_logger.get_role_log_channel(interaction.guild)
+            
+            embed = discord.Embed(
+                title="📋 Role Log Channel Configuration",
+                color=discord.Color.blue()
+            )
+            
+            if current_channel:
+                embed.add_field(
+                    name="✅ Current Channel",
+                    value=f"{current_channel.mention} (`{current_channel.id}`)",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="❌ No Channel Set",
+                    value="Role logging is disabled. Use this command with a channel to enable it.",
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="📋 What Gets Logged",
+                value="• Role additions and removals\n• Bulk role changes\n• Role creations and deletions\n• Role property updates",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_message_log_channel", description="Set or view the message log channel", guild=guild_obj)
+    @app_commands.describe(channel="The channel to use for message logs (leave empty to view current)")
+    async def slash_message_log_channel(interaction: discord.Interaction, channel: discord.TextChannel = None):
+        """Set or view the message log channel"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You need administrator permissions to configure message logging.", ephemeral=True)
+            return
+        
+        if channel:
+            # Set new message log channel
+            message_logger.set_message_log_channel(channel.id)
+            
+            embed = discord.Embed(
+                title="✅ Message Log Channel Updated",
+                description=f"Message changes will now be logged to {channel.mention}",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(
+                name="📋 What Gets Logged",
+                value="• Message deletions (content, author, channel, timestamp)\n• Message edits (before/after content)\n• Bulk message deletions\n• Attachment information\n• Rich embed formatting",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🔧 Cache Information",
+                value=f"• **Cache Size:** {message_logger.max_cache_size:,} messages\n• **Current Cache:** {len(message_logger.message_cache):,} messages\n• **Cache Usage:** {(len(message_logger.message_cache) / message_logger.max_cache_size) * 100:.1f}%",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            # Show current message log channel
+            current_channel = message_logger.get_message_log_channel(interaction.guild)
+            
+            embed = discord.Embed(
+                title="📋 Message Log Channel Configuration",
+                color=discord.Color.blue()
+            )
+            
+            if current_channel:
+                embed.add_field(
+                    name="✅ Current Channel",
+                    value=f"{current_channel.mention} (`{current_channel.id}`)",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="❌ No Channel Set",
+                    value="Message logging is disabled. Use this command with a channel to enable it.",
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="📋 What Gets Logged",
+                value="• Message deletions (content, author, channel, timestamp)\n• Message edits (before/after content)\n• Bulk message deletions\n• Attachment information\n• Rich embed formatting",
+                inline=False
+            )
+            
+            # Cache stats
+            cache_stats = message_logger.get_cache_stats()
+            embed.add_field(
+                name="🔧 Cache Statistics",
+                value=f"• **Cached Messages:** {cache_stats['cached_messages']:,}\n• **Max Cache Size:** {cache_stats['max_cache_size']:,}\n• **Usage:** {cache_stats['cache_usage_percent']:.1f}%",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="dotgen_clear_message_cache", description="Clear the message cache (admin only)", guild=guild_obj)
+    async def slash_clear_message_cache(interaction: discord.Interaction):
+        """Clear the message cache"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You need administrator permissions to clear the message cache.", ephemeral=True)
+            return
+        
+        # Get cache stats before clearing
+        old_count = len(message_logger.message_cache)
+        
+        # Clear cache
+        message_logger.clear_cache()
+        
+        embed = discord.Embed(
+            title="✅ Message Cache Cleared",
+            description=f"Cleared {old_count:,} cached messages from memory.",
+            color=discord.Color.green()
+        )
+        
+        embed.add_field(
+            name="⚠️ Impact",
+            value="• Deleted messages from before this point will have limited logging information\n• New messages will be cached normally\n• This helps free up memory if the cache gets too large",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed)
+
+    # =============================================================================
+    # END ROLE MANAGEMENT SLASH COMMANDS
+    # =============================================================================
+
+# =============================================================================
+# END ADMIN SLASH COMMANDS
 # =============================================================================
 
 # =============================================================================
