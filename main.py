@@ -538,11 +538,29 @@ WELCOME_MESSAGES = [
 
 # Welcome image generation
 async def create_welcome_image(member):
-    """Create a welcome image with member's avatar and background"""
+    """Create a welcome image with member's avatar and dotgen.jpg background"""
     try:
         # Create a 800x400 background image
         width, height = 800, 400
-        background = Image.new('RGB', (width, height), color=(47, 49, 54))  # Discord dark theme color
+        
+        # Load dotgen.jpg as background
+        try:
+            dotgen_bg = Image.open('dotgen.jpg')
+            # Resize dotgen image to fit our dimensions
+            dotgen_bg = dotgen_bg.resize((width, height), Image.Resampling.LANCZOS)
+            
+            # Create a semi-transparent overlay to make the background less visible
+            overlay = Image.new('RGBA', (width, height), (47, 49, 54, 180))  # Dark overlay with transparency
+            
+            # Convert dotgen to RGBA and blend with overlay
+            dotgen_bg = dotgen_bg.convert('RGBA')
+            background = Image.alpha_composite(dotgen_bg, overlay)
+            background = background.convert('RGB')  # Convert back to RGB for drawing
+            
+        except Exception as e:
+            print(f"Error loading dotgen.jpg: {e}")
+            # Fallback to solid color background
+            background = Image.new('RGB', (width, height), color=(47, 49, 54))
         
         # Create drawing context
         draw = ImageDraw.Draw(background)
@@ -555,8 +573,8 @@ async def create_welcome_image(member):
             response = requests.get(avatar_url, timeout=10)
             avatar_image = Image.open(io.BytesIO(response.content))
             
-            # Resize and make circular
-            avatar_size = 150
+            # Resize and make circular with enhanced border
+            avatar_size = 160  # Slightly larger for more prominence
             avatar_image = avatar_image.resize((avatar_size, avatar_size))
             
             # Create circular mask
@@ -567,38 +585,98 @@ async def create_welcome_image(member):
             # Apply mask to avatar
             avatar_image.putalpha(mask)
             
+            # Create glowing border effect
+            border_size = avatar_size + 20
+            border_x = (width - border_size) // 2
+            border_y = 40
+            
+            # Draw multiple circles for glow effect
+            for i in range(5):
+                glow_alpha = 50 - (i * 10)
+                glow_size = border_size + (i * 4)
+                glow_x = (width - glow_size) // 2
+                glow_y = border_y - (i * 2)
+                
+                # Create glow layer
+                glow_overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+                glow_draw = ImageDraw.Draw(glow_overlay)
+                glow_draw.ellipse([glow_x, glow_y, glow_x + glow_size, glow_y + glow_size], 
+                                fill=(114, 137, 218, glow_alpha))
+                
+                # Blend glow with background
+                background_rgba = background.convert('RGBA')
+                background = Image.alpha_composite(background_rgba, glow_overlay).convert('RGB')
+            
+            # Draw main border
+            border_draw = ImageDraw.Draw(background)
+            border_draw.ellipse([border_x, border_y, border_x + border_size, border_y + border_size], 
+                              outline=(114, 137, 218), width=4)
+            
             # Paste avatar on background
             avatar_x = (width - avatar_size) // 2
             avatar_y = 50
-            background.paste(avatar_image, (avatar_x, avatar_y), avatar_image)
+            background_rgba = background.convert('RGBA')
+            background_rgba.paste(avatar_image, (avatar_x, avatar_y), avatar_image)
+            background = background_rgba.convert('RGB')
             
         except Exception as e:
             print(f"Error loading avatar: {e}")
-            # Draw a default circle if avatar fails
-            avatar_x = (width - 150) // 2
+            # Draw a default circle with glow if avatar fails
+            avatar_size = 160
+            avatar_x = (width - avatar_size) // 2
             avatar_y = 50
-            draw.ellipse([avatar_x, avatar_y, avatar_x + 150, avatar_y + 150], fill=(114, 137, 218))
+            
+            # Draw glow effect for default avatar too
+            for i in range(5):
+                glow_alpha = 50 - (i * 10)
+                glow_size = avatar_size + 20 + (i * 4)
+                glow_x = (width - glow_size) // 2
+                glow_y = avatar_y - 10 - (i * 2)
+                
+                glow_overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+                glow_draw = ImageDraw.Draw(glow_overlay)
+                glow_draw.ellipse([glow_x, glow_y, glow_x + glow_size, glow_y + glow_size], 
+                                fill=(114, 137, 218, glow_alpha))
+                
+                background_rgba = background.convert('RGBA')
+                background = Image.alpha_composite(background_rgba, glow_overlay).convert('RGB')
+            
+            draw = ImageDraw.Draw(background)
+            draw.ellipse([avatar_x, avatar_y, avatar_x + avatar_size, avatar_y + avatar_size], 
+                        fill=(114, 137, 218), outline=(255, 255, 255), width=4)
         
-        # Add welcome text
+        # Add welcome text with enhanced visibility
         try:
             # Try to use a nice font, fallback to default
-            font_large = ImageFont.truetype("arial.ttf", 48)
-            font_medium = ImageFont.truetype("arial.ttf", 32)
-            font_small = ImageFont.truetype("arial.ttf", 24)
+            font_large = ImageFont.truetype("arial.ttf", 52)  # Slightly larger
+            font_medium = ImageFont.truetype("arial.ttf", 36)  # Slightly larger
+            font_small = ImageFont.truetype("arial.ttf", 28)   # Slightly larger
         except:
             # Use default font if custom font not available
             font_large = ImageFont.load_default()
             font_medium = ImageFont.load_default()
             font_small = ImageFont.load_default()
         
-        # Welcome text
+        # Create text with shadow/outline for better visibility
+        def draw_text_with_outline(draw, position, text, font, fill_color, outline_color):
+            x, y = position
+            # Draw outline by drawing text in multiple positions
+            for adj_x in range(-2, 3):
+                for adj_y in range(-2, 3):
+                    if adj_x != 0 or adj_y != 0:
+                        draw.text((x + adj_x, y + adj_y), text, font=font, fill=outline_color)
+            # Draw main text
+            draw.text((x, y), text, font=font, fill=fill_color)
+        
+        # Welcome text with outline
         welcome_text = "Welcome!"
         text_bbox = draw.textbbox((0, 0), welcome_text, font=font_large)
         text_width = text_bbox[2] - text_bbox[0]
         text_x = (width - text_width) // 2
-        draw.text((text_x, 220), welcome_text, fill=(255, 255, 255), font=font_large)
+        draw_text_with_outline(draw, (text_x, 230), welcome_text, font_large, 
+                             (255, 255, 255), (0, 0, 0))
         
-        # Member name
+        # Member name with outline
         member_name = member.display_name
         if len(member_name) > 20:
             member_name = member_name[:17] + "..."
@@ -606,14 +684,16 @@ async def create_welcome_image(member):
         name_bbox = draw.textbbox((0, 0), member_name, font=font_medium)
         name_width = name_bbox[2] - name_bbox[0]
         name_x = (width - name_width) // 2
-        draw.text((name_x, 280), member_name, fill=(114, 137, 218), font=font_medium)
+        draw_text_with_outline(draw, (name_x, 290), member_name, font_medium, 
+                             (114, 137, 218), (0, 0, 0))
         
-        # Server info
+        # Server info with outline
         server_text = f"You're member #{len(member.guild.members)}"
         server_bbox = draw.textbbox((0, 0), server_text, font=font_small)
         server_width = server_bbox[2] - server_bbox[0]
         server_x = (width - server_width) // 2
-        draw.text((server_x, 330), server_text, fill=(153, 170, 181), font=font_small)
+        draw_text_with_outline(draw, (server_x, 340), server_text, font_small, 
+                             (255, 215, 0), (0, 0, 0))  # Gold color for member count
         
         # Save to bytes
         img_bytes = io.BytesIO()
@@ -3642,7 +3722,7 @@ async def slash_welcome(interaction: discord.Interaction, member: discord.Member
         )
         
         if welcome_image:
-            embed.set_image(url="attachment://welcome.png")
+            embed.set_image(url="")
         else:
             embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
         
