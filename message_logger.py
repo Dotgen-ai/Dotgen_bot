@@ -375,6 +375,7 @@ class MessageLogger:
             # Get the log channel
             log_channel = self.get_message_log_channel(message.guild)
             if not log_channel:
+                print(f"⚠️ Message log channel not configured or not found (ID: {self.message_log_channel_id})")
                 return False
             
             # Check if bot has permission to send messages
@@ -480,6 +481,7 @@ class MessageLogger:
             
             # Cache the message
             self.cache_message(message)
+            print(f"📥 Cached message: ID={message.id}, Author={message.author.display_name}, Channel=#{message.channel.name}")
             
         except Exception as e:
             print(f"❌ Error caching message: {e}")
@@ -489,8 +491,10 @@ class MessageLogger:
         try:
             # Don't log bot message deletions or DMs
             if message.author.bot or not message.guild:
+                print(f"🤖 Skipping message deletion log (bot: {message.author.bot}, guild: {message.guild is not None})")
                 return
             
+            print(f"🗑️ Processing message deletion: ID={message.id}, Author={message.author.display_name}, Channel=#{message.channel.name}")
             await self.log_message_delete(message)
             
         except Exception as e:

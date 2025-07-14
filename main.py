@@ -1452,8 +1452,8 @@ async def on_member_join(member):
             welcome_image = await create_welcome_image(member, welcome_msg)
             
             if welcome_image:
-                # Send only the image with the embedded welcome message
-                await welcome_channel.send(f"🎉 **{member.mention} just joined {member.guild.name}!**", file=welcome_image)
+                # Send the welcome message content directly integrated with the image
+                await welcome_channel.send(welcome_msg, file=welcome_image)
             else:
                 # Fallback to embed if image creation fails
                 embed = discord.Embed(
@@ -3534,8 +3534,8 @@ async def slash_welcome(interaction: discord.Interaction, member: discord.Member
         welcome_image = await create_welcome_image(member, welcome_msg)
         
         if welcome_image:
-            # Send only the image with the embedded welcome message
-            await welcome_channel.send(f"🎉 **{member.mention} welcome message from {interaction.user.mention}!**", file=welcome_image)
+            # Send the welcome message content directly integrated with the image
+            await welcome_channel.send(welcome_msg, file=welcome_image)
         else:
             # Fallback to embed if image creation fails
             embed = discord.Embed(
