@@ -3712,7 +3712,7 @@ async def slash_help(interaction: discord.Interaction, command: str = None):
     # Show essential commands prominently  
     embed.add_field(
         name="🎯 Essential Commands",
-        value="`/dotgen_info` - Bot info\n`/dotgen_ping` - Bot status\n`/dotgen_config` - Configuration\n`/dotgen_welcome` - Welcome msg\n`/dotgen_announce` - Announcements" + (f"\n`/dotgen_play` - Play music\n`/dotgen_queue` - Music queue" if YOUTUBE_DL_AVAILABLE else ""),
+        value="`/dotgen_info` - Bot info\n`/dotgen_ping` - Bot status\n`/dotgen_config` - Configuration\n`/dotgen_welcome` - Welcome msg\n`/dotgen_announce` - Announcements" + (f"\n`/play` - Play music\n`/queue` - Music queue" if YOUTUBE_DL_AVAILABLE else ""),
         inline=False
     )
     
@@ -3720,7 +3720,7 @@ async def slash_help(interaction: discord.Interaction, command: str = None):
     if YOUTUBE_DL_AVAILABLE:
         embed.add_field(
             name="🎵 Music Commands",
-            value="`/dotgen_play` - Play music\n`/dotgen_skip` - Skip song\n`/dotgen_queue` - Show queue\n`/dotgen_volume` - Set volume\n`/dotgen_shuffle` - Toggle shuffle\n`/dotgen_loop` - Toggle loop modes",
+            value="`/play` - Play music\n`/skip` - Skip song\n`/queue` - Show queue\n`/volume` - Set volume\n`/shuffle` - Toggle shuffle\n`/loop` - Toggle loop modes",
             inline=False
         )
     
@@ -3761,8 +3761,8 @@ async def slash_help(interaction: discord.Interaction, command: str = None):
 # =============================================================================
 
 if YOUTUBE_DL_AVAILABLE:
-    @bot.tree.command(name="dotgen_play", description="Play music from YouTube", guild=guild_obj)
-    @app_commands.describe(query="Song name or YouTube URL to play")
+    @bot.tree.command(name="play", description="Play music from YouTube", guild=guild_obj)
+    @app_commands.describe(query="Song name, artist, or YouTube URL to play")
     async def slash_play(interaction: discord.Interaction, query: str):
         """Slash command to play music"""
         await interaction.response.defer()
@@ -3845,7 +3845,7 @@ if YOUTUBE_DL_AVAILABLE:
                 )
                 embed.add_field(
                     name="🎵 Alternative:",
-                    value="Try: `/dotgen_search <song name>` to find songs before playing",
+                    value="Try: `/search <song name>` to find songs before playing",
                     inline=False
                 )
                 await interaction.edit_original_response(content=None, embed=embed)
@@ -3869,7 +3869,7 @@ if YOUTUBE_DL_AVAILABLE:
                 )
                 embed.add_field(
                     name="💡 Try:",
-                    value="• Check spelling of song/artist name\n• Try a more specific search\n• Use `/dotgen_search` to find available songs",
+                    value="• Check spelling of song/artist name\n• Try a more specific search\n• Use `/search` to find available songs",
                     inline=False
                 )
                 await interaction.edit_original_response(content=None, embed=embed)
@@ -3882,7 +3882,7 @@ if YOUTUBE_DL_AVAILABLE:
                 )
                 embed.add_field(
                     name="💡 Suggestions:",
-                    value="• Try a different song or search term\n• Use `/dotgen_search` to find songs\n• Check if the URL is valid\n• Contact an admin if the problem persists",
+                    value="• Try a different song or search term\n• Use `/search` to find songs\n• Check if the URL is valid\n• Contact an admin if the problem persists",
                     inline=False
                 )
                 embed.add_field(
@@ -3894,7 +3894,7 @@ if YOUTUBE_DL_AVAILABLE:
                     embed.add_field(name="Technical details:", value=f"`{error_msg}`", inline=False)
                 await interaction.edit_original_response(content=None, embed=embed)
 
-    @bot.tree.command(name="dotgen_skip", description="Skip the current song", guild=guild_obj)
+    @bot.tree.command(name="skip", description="Skip the current song", guild=guild_obj)
     async def slash_skip(interaction: discord.Interaction):
         """Slash command to skip current song"""
         if not interaction.user.voice:
@@ -3923,7 +3923,7 @@ if YOUTUBE_DL_AVAILABLE:
         else:
             await interaction.response.send_message("❌ No music is currently playing!", ephemeral=True)
 
-    @bot.tree.command(name="dotgen_stop", description="Stop music and clear queue", guild=guild_obj)
+    @bot.tree.command(name="stop", description="Stop music and clear queue", guild=guild_obj)
     async def slash_stop(interaction: discord.Interaction):
         """Slash command to stop music and clear queue"""
         if not interaction.user.voice:
@@ -3949,7 +3949,69 @@ if YOUTUBE_DL_AVAILABLE:
         )
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_queue", description="Show the music queue", guild=guild_obj)
+    @bot.tree.command(name="pause", description="Pause the currently playing song", guild=guild_obj)
+    async def slash_pause(interaction: discord.Interaction):
+        """Slash command to pause music"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not connected to any voice channel!", ephemeral=True)
+            return
+
+        if not voice_client.is_playing():
+            await interaction.response.send_message("❌ No music is currently playing!", ephemeral=True)
+            return
+
+        if voice_client.is_paused():
+            await interaction.response.send_message("❌ Music is already paused!", ephemeral=True)
+            return
+
+        voice_client.pause()
+        
+        # Update the player state if it exists
+        if interaction.guild.id in music_players:
+            music_players[interaction.guild.id].pause()
+
+        embed = discord.Embed(
+            title="⏸️ Music Paused",
+            description="Playback has been paused.",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="resume", description="Resume the currently paused song", guild=guild_obj)
+    async def slash_resume(interaction: discord.Interaction):
+        """Slash command to resume music"""
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to be in a voice channel to use music commands!", ephemeral=True)
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ I'm not connected to any voice channel!", ephemeral=True)
+            return
+
+        if not voice_client.is_paused():
+            await interaction.response.send_message("❌ Music is not currently paused!", ephemeral=True)
+            return
+
+        voice_client.resume()
+        
+        # Update the player state if it exists
+        if interaction.guild.id in music_players:
+            music_players[interaction.guild.id].resume()
+
+        embed = discord.Embed(
+            title="▶️ Music Resumed",
+            description="Playback has been resumed.",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="queue", description="Show the music queue", guild=guild_obj)
     async def slash_queue(interaction: discord.Interaction):
         """Slash command to show music queue"""
         if interaction.guild.id not in music_queues:
@@ -3987,13 +4049,13 @@ if YOUTUBE_DL_AVAILABLE:
             if not queue.current:
                 embed.add_field(
                     name="📝 Queue Status",
-                    value="Queue is empty. Use `/dotgen_play` to add songs!",
+                    value="Queue is empty. Use `/play` to add songs!",
                     inline=False
                 )
 
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_volume", description="Change music volume", guild=guild_obj)
+    @bot.tree.command(name="volume", description="Change music volume", guild=guild_obj)
     @app_commands.describe(volume="Volume level (0-100)")
     async def slash_volume(interaction: discord.Interaction, volume: int):
         """Slash command to change music volume"""
@@ -4025,7 +4087,7 @@ if YOUTUBE_DL_AVAILABLE:
         )
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_disconnect", description="Disconnect from voice channel", guild=guild_obj)
+    @bot.tree.command(name="disconnect", description="Disconnect from voice channel", guild=guild_obj)
     async def slash_disconnect(interaction: discord.Interaction):
         """Slash command to disconnect from voice channel"""
         voice_client = interaction.guild.voice_client
@@ -4050,7 +4112,7 @@ if YOUTUBE_DL_AVAILABLE:
         )
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_shuffle", description="Toggle shuffle mode for the queue", guild=guild_obj)
+    @bot.tree.command(name="shuffle", description="Toggle shuffle mode for the queue", guild=guild_obj)
     async def slash_shuffle(interaction: discord.Interaction):
         """Slash command to toggle shuffle mode"""
         if not interaction.user.voice:
@@ -4080,7 +4142,7 @@ if YOUTUBE_DL_AVAILABLE:
         
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_loop", description="Toggle loop mode (current song or queue)", guild=guild_obj)
+    @bot.tree.command(name="loop", description="Toggle loop mode (current song or queue)", guild=guild_obj)
     @app_commands.describe(mode="Loop mode: 'song' for current song, 'queue' for entire queue, 'off' to disable")
     async def slash_loop(interaction: discord.Interaction, mode: str = "song"):
         """Slash command to toggle loop modes"""
@@ -4125,7 +4187,7 @@ if YOUTUBE_DL_AVAILABLE:
         
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_previous", description="Play the previous song", guild=guild_obj)
+    @bot.tree.command(name="previous", description="Play the previous song", guild=guild_obj)
     async def slash_previous(interaction: discord.Interaction):
         """Slash command to play previous song"""
         if not interaction.user.voice:
@@ -4155,7 +4217,7 @@ if YOUTUBE_DL_AVAILABLE:
         else:
             await interaction.response.send_message("❌ No previous song in history!", ephemeral=True)
 
-    @bot.tree.command(name="dotgen_remove", description="Remove a song from the queue", guild=guild_obj)
+    @bot.tree.command(name="remove", description="Remove a song from the queue", guild=guild_obj)
     @app_commands.describe(position="Position of the song to remove (1-based)")
     async def slash_remove(interaction: discord.Interaction, position: int):
         """Slash command to remove a song from queue"""
@@ -4184,7 +4246,7 @@ if YOUTUBE_DL_AVAILABLE:
         else:
             await interaction.response.send_message("❌ Failed to remove song!", ephemeral=True)
 
-    @bot.tree.command(name="dotgen_move", description="Move a song to a different position in queue", guild=guild_obj)
+    @bot.tree.command(name="move", description="Move a song to a different position in queue", guild=guild_obj)
     @app_commands.describe(from_pos="Current position of the song", to_pos="New position for the song")
     async def slash_move(interaction: discord.Interaction, from_pos: int, to_pos: int):
         """Slash command to move a song in the queue"""
@@ -4212,7 +4274,7 @@ if YOUTUBE_DL_AVAILABLE:
         else:
             await interaction.response.send_message("❌ Failed to move song!", ephemeral=True)
 
-    @bot.tree.command(name="dotgen_nowplaying", description="Show currently playing song with progress", guild=guild_obj)
+    @bot.tree.command(name="nowplaying", description="Show currently playing song with progress", guild=guild_obj)
     async def slash_nowplaying(interaction: discord.Interaction):
         """Slash command to show now playing with detailed info"""
         voice_client = interaction.guild.voice_client
@@ -4259,8 +4321,8 @@ if YOUTUBE_DL_AVAILABLE:
         
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="dotgen_search", description="Search for songs without playing immediately", guild=guild_obj)
-    @app_commands.describe(query="Search query for songs")
+    @bot.tree.command(name="search", description="Search for songs without playing immediately", guild=guild_obj)
+    @app_commands.describe(query="Song name, artist, or keywords to search for")
     async def slash_search(interaction: discord.Interaction, query: str):
         """Slash command to search for songs and show results"""
         await interaction.response.defer()
@@ -4303,7 +4365,7 @@ if YOUTUBE_DL_AVAILABLE:
                     inline=False
                 )
             
-            embed.set_footer(text="Use /dotgen_play <song name> to add songs to queue")
+            embed.set_footer(text="Use /play <song name> to add songs to queue")
             await interaction.followup.send(embed=embed)
             
         except Exception as e:
@@ -4750,7 +4812,7 @@ async def slash_botstatus(interaction: discord.Interaction, action: str = "curre
 # =============================================================================
 
 if YOUTUBE_DL_AVAILABLE:
-    @bot.tree.command(name="dotgen_swap", description="Swap positions of two songs in the queue", guild=guild_obj)
+    @bot.tree.command(name="swap", description="Swap positions of two songs in the queue", guild=guild_obj)
     @app_commands.describe(
         position1="First song position",
         position2="Second song position"
@@ -4789,7 +4851,7 @@ if YOUTUBE_DL_AVAILABLE:
         except Exception as e:
             await interaction.response.send_message(f"❌ Error swapping songs: {e}", ephemeral=True)
 
-    @bot.tree.command(name="dotgen_clear", description="Clear the entire music queue", guild=guild_obj)
+    @bot.tree.command(name="clear", description="Clear the entire music queue", guild=guild_obj)
     async def slash_clear(interaction: discord.Interaction):
         """Clear the entire music queue"""
         if not interaction.user.voice:
@@ -4816,7 +4878,7 @@ if YOUTUBE_DL_AVAILABLE:
         except Exception as e:
             await interaction.response.send_message(f"❌ Error clearing queue: {e}", ephemeral=True)
 
-    @bot.tree.command(name="dotgen_history", description="Show recently played songs", guild=guild_obj)
+    @bot.tree.command(name="history", description="Show recently played songs", guild=guild_obj)
     async def slash_history(interaction: discord.Interaction):
         """Show recently played songs"""
         player = music_players.get(interaction.guild.id)
