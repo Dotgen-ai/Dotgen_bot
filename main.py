@@ -195,6 +195,11 @@ if YOUTUBE_DL_AVAILABLE:
                 'check_formats': None,
                 'comment_sort': 'top',
                 'max_comments': [0],
+                # Add bypass options for bot detection
+                'include_live_dash': False,
+                'include_dash_manifest': False,
+                'include_hls_manifest': False,
+                'bypass_age_gate': True,
             }
         },
         
@@ -208,6 +213,18 @@ if YOUTUBE_DL_AVAILABLE:
         'extract_flat': False,
         'writethumbnail': False,
         'writeinfojson': False,
+        
+        # Network and DNS handling improvements
+        'socket_timeout': 30,
+        'skip_unavailable_fragments': True,
+        'force_ipv4': True,
+        'prefer_insecure': False,
+        
+        # Additional DNS and connection reliability
+        'geo_bypass': True,
+        'geo_bypass_country': 'US',
+        'call_home': False,
+        'check_certificate': False,
         
         # Geographic and proxy settings
         'geo_bypass': True,
@@ -246,19 +263,24 @@ if YOUTUBE_DL_AVAILABLE:
     # Create multiple YouTube DL instances for advanced fallback system
     ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
     
-    # Fallback #1: Mobile client priority
+    # Fallback #1: Mobile client priority with enhanced DNS handling
     ytdl_mobile_options = ytdl_format_options.copy()
     ytdl_mobile_options['extractor_args']['youtube']['player_client'] = ['android_music', 'android']
     ytdl_mobile_options['http_headers']['User-Agent'] = 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip'
+    ytdl_mobile_options['socket_timeout'] = 45  # Longer timeout for mobile
+    ytdl_mobile_options['retries'] = 6
     ytdl_mobile = youtube_dl.YoutubeDL(ytdl_mobile_options)
     
-    # Fallback #2: Web-only with different headers
+    # Fallback #2: Web-only with different headers and enhanced networking
     ytdl_web_options = ytdl_format_options.copy()
     ytdl_web_options['extractor_args']['youtube']['player_client'] = ['web_music', 'web']
     ytdl_web_options['http_headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    ytdl_web_options['socket_timeout'] = 60  # Longer timeout for web client
+    ytdl_web_options['retries'] = 7
+    ytdl_web_options['force_ipv4'] = True  # Force IPv4 to avoid DNS issues
     ytdl_web = youtube_dl.YoutubeDL(ytdl_web_options)
     
-    # Fallback #3: Minimal options (last resort)
+    # Fallback #3: Minimal options (last resort) with maximum compatibility
     ytdl_minimal_options = {
         'format': 'bestaudio/best',
         'noplaylist': True,
@@ -266,6 +288,11 @@ if YOUTUBE_DL_AVAILABLE:
         'no_warnings': True,
         'extractflat': False,
         'default_search': 'ytsearch',
+        'socket_timeout': 90,  # Very long timeout as last resort
+        'retries': 10,
+        'force_ipv4': True,
+        'geo_bypass': True,
+        'nocheckcertificate': True,
         'extractor_args': {'youtube': {'player_client': ['web']}},
         'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     }
@@ -389,6 +416,13 @@ if YOUTUBE_DL_AVAILABLE:
                 ("Minimal extractor (fallback)", ytdl_minimal)
             ]
             
+            # If not a direct URL, try direct search approach as first method
+            is_search_query = not (url.startswith('http://') or url.startswith('https://'))
+            if is_search_query:
+                # Prepend search-optimized method for non-URL queries
+                search_url = f"ytsearch:{url}"
+                extraction_methods.insert(0, ("Search-optimized extractor", ytdl))
+            
             data = None
             last_error = None
             
@@ -405,7 +439,12 @@ if YOUTUBE_DL_AVAILABLE:
                     if hasattr(ytdl_instance, 'params') and 'http_headers' in ytdl_instance.params:
                         ytdl_instance.params['http_headers']['User-Agent'] = get_user_agent()
                     
-                    data = await loop.run_in_executor(None, lambda: ytdl_instance.extract_info(url, download=not stream))
+                    # Use search URL for search queries on first attempt
+                    extraction_url = url
+                    if is_search_query and attempt == 1 and "Search-optimized" in method_name:
+                        extraction_url = search_url
+                    
+                    data = await loop.run_in_executor(None, lambda: ytdl_instance.extract_info(extraction_url, download=not stream))
                     
                     if data:
                         print(f"✅ Successfully extracted using {method_name}")
@@ -485,6 +524,13 @@ if YOUTUBE_DL_AVAILABLE:
                 ("Minimal extractor (fallback)", ytdl_minimal)
             ]
             
+            # If not a direct URL, try direct search approach as first method
+            is_search_query = not (url.startswith('http://') or url.startswith('https://'))
+            if is_search_query:
+                # Prepend search-optimized method for non-URL queries
+                search_url = f"ytsearch:{url}"
+                extraction_methods.insert(0, ("Search-optimized extractor", ytdl))
+            
             data = None
             last_error = None
             
@@ -499,7 +545,12 @@ if YOUTUBE_DL_AVAILABLE:
                     if hasattr(ytdl_instance, 'params') and 'http_headers' in ytdl_instance.params:
                         ytdl_instance.params['http_headers']['User-Agent'] = get_user_agent()
                     
-                    data = await loop.run_in_executor(None, lambda: ytdl_instance.extract_info(url, download=False))
+                    # Use search URL for search queries on first attempt
+                    extraction_url = url
+                    if is_search_query and attempt == 1 and "Search-optimized" in method_name:
+                        extraction_url = search_url
+                    
+                    data = await loop.run_in_executor(None, lambda: ytdl_instance.extract_info(extraction_url, download=False))
                     
                     if data:
                         print(f"✅ Successfully extracted metadata using {method_name}")
@@ -1319,9 +1370,24 @@ if YOUTUBE_DL_AVAILABLE:
         """Search YouTube for a song"""
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch:{query}", download=False))
+            search_query = f"ytsearch:{query}"
             
-            if 'entries' in data and data['entries']:
+            # Try multiple ytdl instances for better success rate
+            data = None
+            for ytdl_instance in [ytdl, ytdl_mobile, ytdl_web, ytdl_minimal]:
+                try:
+                    # Use a proper function instead of lambda to avoid closure issues
+                    def extract_with_instance(instance, query):
+                        return instance.extract_info(query, download=False)
+                    
+                    data = await loop.run_in_executor(None, extract_with_instance, ytdl_instance, search_query)
+                    if data and 'entries' in data and data['entries']:
+                        break
+                except Exception as e:
+                    print(f"YT-DL search fallback failed: {e}")
+                    continue
+            
+            if data and 'entries' in data and data['entries']:
                 return data['entries'][0]
             return None
         except Exception as e:
@@ -2975,9 +3041,24 @@ if YOUTUBE_DL_AVAILABLE:
         try:
             search_msg = await ctx.send(f"🔍 Searching for: **{query}**...")
             
-            # Search for tracks
+            # Search for tracks using multiple ytdl instances
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch5:{query}", download=False))
+            search_query = f"ytsearch5:{query}"
+            
+            # Try multiple ytdl instances for better success rate
+            data = None
+            for ytdl_instance in [ytdl, ytdl_mobile, ytdl_web, ytdl_minimal]:
+                try:
+                    # Use a proper function instead of lambda to avoid closure issues
+                    def extract_with_instance(instance, query):
+                        return instance.extract_info(query, download=False)
+                    
+                    data = await loop.run_in_executor(None, extract_with_instance, ytdl_instance, search_query)
+                    if data and 'entries' in data and data['entries']:
+                        break
+                except Exception as e:
+                    print(f"YT-DL search fallback failed: {e}")
+                    continue
             
             if 'entries' in data and data['entries']:
                 embed = discord.Embed(
@@ -4334,10 +4415,24 @@ if YOUTUBE_DL_AVAILABLE:
                 await interaction.followup.send("❌ Please provide a valid search query.", ephemeral=True)
                 return
             
-            # Search for multiple results
+            # Search for multiple results using the ytdl instance
             loop = asyncio.get_event_loop()
             search_query = f"ytsearch5:{sanitized_query}"  # Search for 5 results
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
+            
+            # Try multiple ytdl instances for better success rate
+            data = None
+            for ytdl_instance in [ytdl, ytdl_mobile, ytdl_web, ytdl_minimal]:
+                try:
+                    # Use a proper function instead of lambda to avoid closure issues
+                    def extract_with_instance(instance, query):
+                        return instance.extract_info(query, download=False)
+                    
+                    data = await loop.run_in_executor(None, extract_with_instance, ytdl_instance, search_query)
+                    if data and 'entries' in data and data['entries']:
+                        break
+                except Exception as e:
+                    print(f"YT-DL fallback failed: {e}")
+                    continue
             
             if not data or 'entries' not in data or not data['entries']:
                 await interaction.followup.send("❌ No results found for your search!")
